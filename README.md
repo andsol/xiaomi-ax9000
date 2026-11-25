@@ -56,6 +56,9 @@ The images appear in `out/`. Before flashing, read:
   OS, options, adding your own packages, verifying the image, troubleshooting.
 - **[docs/install.md](docs/install.md):** flashing: pre-flight checklist, safe
   initramfs test boot, rollback and UART recovery.
+- **[Upgrading to a newer build](docs/install.md#upgrading-to-a-newer-build):** your
+  settings are kept, but packages you installed later with `apk add` are not and must be
+  installed again.
 
 ## Status
 

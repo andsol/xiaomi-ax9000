@@ -54,6 +54,57 @@ sysupgrade -v /tmp/openwrt-...-sysupgrade.bin     # keeps settings
 Do not pass `-n` unless you want to drop the configuration. After the reboot, check
 `logread -e ax9000`, `ubus call ax9000.fan status`, `ubus call ax9000.led status`.
 
+## Upgrading to a newer build
+
+Build the new image and flash it the same way: `sysupgrade -v <image>` on the router, or
+LuCI *System → Backup / Flash Firmware → Flash new firmware image* with **Keep settings**
+ticked. Here is what survives and what you have to redo.
+
+**Kept automatically**
+
+* Your configuration in `/etc/config`: network, Wi-Fi, firewall, DHCP, the fan, the X
+  light, the status LEDs, and the settings of every package in the image.
+  `sysupgrade -l` lists exactly which files are kept.
+* Files you added to `/etc/sysupgrade.conf`.
+* Older fan settings (Silent / Balanced / ... modes) are converted once at first boot to
+  the Day / Night settings; a *Manual* speed becomes a fixed Day speed. Settings already
+  in the new format are left alone.
+
+**Not kept: packages you installed with `apk add`**
+
+The new image contains only the packages it was built with. Anything you installed later
+is gone after the upgrade. Its configuration in `/etc/config` is still there, so the
+package works as before once it is installed again.
+
+* Packages that contain kernel modules (`kmod-*`, and everything that needs them, such as
+  `sqm-scripts`) cannot be installed with `apk` at all on this build, because it has its
+  own kernel. Put them in `config/local.config` and rebuild
+  ([build.md](build.md#add-your-own-packages)). They are then part of every future image.
+* Userspace-only packages can be installed again from the official feeds.
+
+To make this easy, keep a list before you upgrade:
+
+```sh
+# before the upgrade: backup with a package list, copy it off the router
+sysupgrade -k -b /tmp/backup-$(date +%F).tar.gz
+apk info > /tmp/packages-before.txt        # the same list as plain text
+
+# after the upgrade: compare and install what is missing
+apk update
+apk info > /tmp/packages-after.txt
+grep -vxFf /tmp/packages-after.txt /tmp/packages-before.txt   # missing packages
+apk add <package> ...
+```
+
+Packages you install on every router are better added to `config/local.config`, so the
+next image already has them.
+
+**After the upgrade**
+
+* If the LuCI *Fan* or *LED* page looks like the old version, reload it without the
+  browser cache (Ctrl+F5).
+* Check `logread -e ax9000`, `ubus call ax9000.fan status` and `ubus call ax9000.led status`.
+
 ## Rollback to stock OpenWrt
 
 Flash the stock 25.12.x sysupgrade image: `sysupgrade -n /tmp/stock-sysupgrade.bin`
