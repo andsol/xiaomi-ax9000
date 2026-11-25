@@ -27,6 +27,18 @@ hacks, and adds a LuCI app for the new controls.
 - **LuCI:** *System → AX9000 Controls*, with *Fan* and *LED* pages (English, Russian).
 - Everything else is plain OpenWrt 25.12 for the AX9000, with `luci-ssl` included.
 
+## Screenshots
+
+**Fan:** a day and a night setting, each a 4-point curve or a fixed speed, with live
+temperature, speed and RPM.
+
+![Fan page in LuCI](docs/fan-management.png)
+
+**LED:** effect, colour and brightness of the X light with a live preview, night mode,
+the front status indicators and event signals.
+
+![LED page in LuCI](docs/led-management.png)
+
 ## Quick start
 
 You need Docker (Docker Desktop on Windows/macOS), Git, about 25 GB of free disk space and

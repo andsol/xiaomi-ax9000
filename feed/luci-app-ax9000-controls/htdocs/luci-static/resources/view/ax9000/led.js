@@ -149,7 +149,7 @@ var CSS = [
 	'.axl-stack{display:grid;gap:1rem}',
 	'.axl-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1rem;align-items:start}',
 	'@media (max-width:900px){.axl-grid2{grid-template-columns:1fr}}',
-	'.axl-card{border:1px solid var(--axl-line);background:var(--axl-card);border-radius:.5rem;padding:1rem 1.1rem;display:grid;gap:.9rem;min-width:0}',
+	'.axl-card{border:1px solid var(--axl-line);background:var(--axl-card);border-radius:.5rem;padding:1rem 1.1rem;display:grid;gap:.9rem;align-content:start;min-width:0}',
 	'.axl-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem}',
 	'.axl-head h3{margin:0;font-size:1.05rem;padding:0;border:0}',
 	'.axl-head p{margin:.15rem 0 0;font-size:.85rem;opacity:.7}',
