@@ -88,6 +88,7 @@ a way to recover (see [docs/install.md](docs/install.md)).
 | `tools/bdf/`, `tools/radio/` | Board data file generator/extractor, on-router BDF swap helper |
 | `tests/` | Tests for the services, LuCI helpers and the BDF tools |
 | `docs/` | Build, install, radio and developer notes |
+| `AGENTS.md` | Working notes for contributors and coding agents (tests, deploying to a router, pitfalls) |
 
 ## Licensing and redistribution
 
