@@ -20,9 +20,10 @@ hacks, and adds a LuCI app for the new controls.
   restricted to the AX9000's real frequency range), and LuCI offers only the channels
   the hardware supports (36-64 on that radio). Background: [docs/radio.md](docs/radio.md).
 - **Fan:** EMC2301 driver with a kernel-level thermal failsafe, plus the `ax9000-fand`
-  service with *Silent / Balanced / Aggressive / Custom / Manual* modes.
+  service with a *Day* and a *Night* setting: each a 4-point curve you drag in LuCI (the
+  fan stops below the first point) or a fixed speed.
 - **LEDs:** the X light as one RGB LED on hardware PWM: any colour, smooth brightness,
-  effects. Details: [docs/dev/leds.md](docs/dev/leds.md).
+  effects, night mode and event signals; the front status LEDs can be set too. Details: [docs/dev/leds.md](docs/dev/leds.md).
 - **LuCI:** *System → AX9000 Controls*, with *Fan* and *LED* pages (English, Russian).
 - Everything else is plain OpenWrt 25.12 for the AX9000, with `luci-ssl` included.
 

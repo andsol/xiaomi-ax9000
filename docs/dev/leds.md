@@ -207,3 +207,15 @@ does not clear it on its own. Note this in the report; it does no harm.
   shows the offline state permanently.
 * **Any change to `/etc/config/ax9000` briefly restarts the LED daemon** (procd config
   trigger), so the X light may flicker for a moment, including when the fan page saves.
+* **Front indicators.** There are two: *top* (Internet: `blue:wan`, `yellow:wan`) and
+  *bottom* (System: `blue:status`, `yellow:status`). The blue LED looks white through the
+  diffuser, so the page calls it *White*. Each indicator has a colour (White / Yellow), an
+  action (Off, On, Heartbeat, Blink, Network activity) and, for network activity, a port
+  (WAN, LAN 1-4; the kernel `netdev` trigger, lit on link, blinking with traffic). The choice is stored in `/etc/config/ax9000` as
+  `config indicator 'top'|'bottom'` (`color`, `action`, `port`), and the page writes the
+  matching standard `config led` sections to `/etc/config/system` (the unused colour is
+  set to off).
+* The page lists LEDs through `luci.getLEDs`: rpcd resolves the `/sys/class/leds/<name>`
+  symlink before its file ACL check, so reading `/sys/class/leds/*/trigger` from LuCI is
+  always denied. The stock `led` init script has no reload trigger, so `ax9000-ledd`'s
+  init script registers one: a change to `/etc/config/system` restarts `/etc/init.d/led`.

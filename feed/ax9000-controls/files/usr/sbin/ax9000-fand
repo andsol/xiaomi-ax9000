@@ -116,7 +116,7 @@ function tick() {
 	catch (e) {
 		// Never leave the fan low because of a bug: fail safe.
 		log('decision failed: ' + e);
-		res = { duty: 100, mode: cfg.mode, temp: null, error: 'internal', state: null };
+		res = { duty: 100, mode: fanctl.active_profile(cfg, now), temp: null, error: 'internal', state: null };
 	}
 	state = res.state;
 
@@ -131,8 +131,7 @@ function tick() {
 	publish({
 		ts: clock(true)[0],
 		interval: cfg.interval,
-		mode: cfg.mode,
-		active_mode: res.mode,
+		active: res.mode,
 		temp: res.temp,
 		duty: res.duty,
 		duty_applied: applied,

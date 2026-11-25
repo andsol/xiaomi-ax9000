@@ -13,6 +13,9 @@ start_service() {
 
 service_triggers() {
 	procd_add_reload_trigger ax9000
+	# The stock led script has no trigger of its own, so status LEDs set in
+	# /etc/config/system (LuCI LED page) would only change after a reboot.
+	procd_add_config_trigger "config.change" "system" /etc/init.d/led restart
 }
 
 reload_service() {

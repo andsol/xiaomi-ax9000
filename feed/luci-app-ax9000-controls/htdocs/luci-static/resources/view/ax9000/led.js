@@ -1,40 +1,40 @@
 'use strict';
 'require view';
-'require form';
 'require rpc';
 'require uci';
 'require poll';
-'require fs';
-'require dom';
 'require ui';
 'require ax9000.ledfx as ledfx';
 
-var callStatus = rpc.declare({
-	object: 'ax9000.led',
-	method: 'status',
-	expect: { '': {} }
-});
+/*
+ * LED page: the X light (effect, color, speed, brightness), its night mode,
+ * event signals, and the small status LEDs. Everything is staged in UCI and
+ * applied with the standard LuCI Save / Save & Apply buttons:
+ *   - /etc/config/ax9000 (sections 'led' and 'led_event') -> ax9000-ledd reloads
+ *   - /etc/config/system `config led` sections -> the ax9000-ledd init script
+ *     restarts the stock led service on that config change.
+ */
 
+var callStatus = rpc.declare({ object: 'ax9000.led', method: 'status', expect: { '': {} } });
 var callPreview = rpc.declare({
-	object: 'ax9000.led',
-	method: 'preview',
-	params: [ 'effect', 'color', 'speed', 'brightness', 'seconds' ],
-	expect: { '': {} }
+	object: 'ax9000.led', method: 'preview',
+	params: [ 'effect', 'color', 'speed', 'brightness', 'seconds' ], expect: { '': {} }
 });
-
-var callOff = rpc.declare({
-	object: 'ax9000.led',
-	method: 'off_until_reboot',
-	params: [ 'off' ],
-	expect: { '': {} }
-});
+var callOff = rpc.declare({ object: 'ax9000.led', method: 'off_until_reboot', params: [ 'off' ], expect: { '': {} } });
+var callLeds = rpc.declare({ object: 'luci', method: 'getLEDs', expect: { '': {} } });
 
 var HEX_RE = /^#[0-9a-fA-F]{6}$/;
+var TIME_RE = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/;
 var SPEED_MIN = 0.1, SPEED_MAX = 10;
 var PREVIEW_SECONDS = 10;
-var SKIP_LED = 'rgb:indicator';
-var ledsChanged = false;
-var TRIGGER_RE = /^(none|default-on|heartbeat|netdev|timer|phy\d+tpt)$/;
+var RECENT_KEY = 'ax9000-led-recent';
+/* Front indicators: each a blue (looks white) and a yellow GPIO LED.
+ * Network activity uses the kernel netdev trigger on one port. */
+var INDICATORS = {
+	top: { white: 'blue:wan', yellow: 'yellow:wan' },
+	bottom: { white: 'blue:status', yellow: 'yellow:status' }
+};
+var PORTS = [ 'wan', 'lan1', 'lan2', 'lan3', 'lan4' ];
 
 function effects() {
 	return [
@@ -52,88 +52,189 @@ function effectLabel(name) {
 	return hit ? hit[1] : name;
 }
 
-function eventLabel(name) {
+function usesColor(effect) { return [ 'static', 'breathing', 'flashing' ].indexOf(effect) >= 0; }
+function usesSpeed(effect) { return [ 'breathing', 'flashing', 'cycle', 'rainbow' ].indexOf(effect) >= 0; }
+
+function eventInfo(name) {
 	return ({
-		offline: _('No internet'),
-		wps: _('WPS pairing'),
-		upgrade: _('Firmware upgrade')
-	})[name] || name;
+		offline: [ _('No internet'), _('The watched interface has no connection') ],
+		wps: [ _('WPS pairing'), _('After the WPS button is pressed') ],
+		upgrade: [ _('Firmware upgrade'), _('While a sysupgrade runs') ]
+	})[name] || [ name, '' ];
 }
 
-function ledLabel(name) {
-	return ({
-		'blue:status': _('System, blue'),
-		'yellow:status': _('System, yellow'),
-		'blue:wan': _('Network, blue'),
-		'yellow:wan': _('Network, yellow')
-	})[name] || name;
+function indicatorLabel(id) {
+	return id == 'top' ? _('Top') : _('Bottom');
 }
 
-/* ---- colour helpers ---- */
+function indicatorHint(id) {
+	return id == 'top' ? _('Internet') : _('System');
+}
 
-function hexToHsl(hex) {
-	var r = parseInt(hex.substr(1, 2), 16) / 255,
-	    g = parseInt(hex.substr(3, 2), 16) / 255,
-	    b = parseInt(hex.substr(5, 2), 16) / 255,
-	    max = Math.max(r, g, b), min = Math.min(r, g, b),
-	    l = (max + min) / 2, d = max - min, h = 0, s = 0;
+function indicatorActions() {
+	return [
+		[ 'off', _('Off') ],
+		[ 'on', _('On') ],
+		[ 'heartbeat', _('Heartbeat') ],
+		[ 'blink', _('Blink') ],
+		[ 'netdev', _('Network activity') ]
+	];
+}
 
+function portChoices() {
+	return [
+		[ 'wan', _('WAN') ], [ 'lan1', _('LAN 1') ], [ 'lan2', _('LAN 2') ],
+		[ 'lan3', _('LAN 3') ], [ 'lan4', _('LAN 4') ]
+	];
+}
+
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+function padTime(v) {
+	var m = /^([0-9]{1,2}):([0-9]{2})$/.exec(String(v || '').trim());
+	return m ? (m[1].length < 2 ? '0' : '') + m[1] + ':' + m[2] : String(v || '');
+}
+
+/* ---- colour maths: hue/saturation at full value; brightness is separate ---- */
+
+function hsToHex(h, s) {
+	s /= 100;
+	var f = function(n) {
+		var k = (n + h / 60) % 6;
+		return Math.round(255 * (1 - s * Math.max(0, Math.min(k, 4 - k, 1))));
+	};
+	return '#' + [ f(5), f(3), f(1) ].map(function(v) { return ('0' + v.toString(16)).slice(-2); }).join('');
+}
+
+function hexToHs(hex) {
+	var r = parseInt(hex.substr(1, 2), 16) / 255, g = parseInt(hex.substr(3, 2), 16) / 255,
+	    b = parseInt(hex.substr(5, 2), 16) / 255, mx = Math.max(r, g, b), mn = Math.min(r, g, b),
+	    d = mx - mn, h = 0;
 	if (d) {
-		s = d / (1 - Math.abs(2 * l - 1));
-		if (max == r) h = ((g - b) / d + 6) % 6;
-		else if (max == g) h = (b - r) / d + 2;
+		if (mx == r) h = ((g - b) / d + 6) % 6;
+		else if (mx == g) h = (b - r) / d + 2;
 		else h = (r - g) / d + 4;
 		h *= 60;
 	}
-	return [ Math.round(h), Math.round(s * 100), Math.round(l * 100) ];
+	return [ Math.round(h), mx ? Math.round(d / mx * 100) : 0 ];
 }
 
-function hslToHex(h, s, l) {
-	s /= 100; l /= 100;
-	var a = s * Math.min(l, 1 - l);
-	function ch(n) {
-		var k = (n + h / 30) % 12,
-		    v = l - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
-		return ('0' + Math.round(v * 255).toString(16)).slice(-2);
+function readRecent() {
+	try {
+		var v = JSON.parse(window.localStorage.getItem(RECENT_KEY) || '[]');
+		return Array.isArray(v) ? v.filter(function(c) { return HEX_RE.test(c); }).slice(0, 6) : [];
 	}
-	return '#' + ch(0) + ch(8) + ch(4);
+	catch (e) { return []; }
 }
 
-/* ---- styles (theme neutral: only currentColor and translucent greys) ---- */
+function pushRecent(hex) {
+	try {
+		var v = readRecent().filter(function(c) { return c != hex; });
+		v.unshift(hex);
+		window.localStorage.setItem(RECENT_KEY, JSON.stringify(v.slice(0, 6)));
+	}
+	catch (e) {}
+}
+
+/* speed slider: logarithmic 0.1x .. 10x over 0..1000 */
+function speedToPos(v) { return Math.round(Math.log(clamp(v, SPEED_MIN, SPEED_MAX) / SPEED_MIN) / Math.log(SPEED_MAX / SPEED_MIN) * 1000); }
+function posToSpeed(p) { return +(SPEED_MIN * Math.pow(SPEED_MAX / SPEED_MIN, p / 1000)).toPrecision(2); }
+
+/* ---- styles: theme neutral (currentColor and translucent greys) ---- */
 
 var CSS = [
-	'.axl-color{display:flex;flex-direction:column;gap:.6em;max-width:28em}',
-	'.axl-row{display:flex;flex-wrap:wrap;align-items:center;gap:.5em}',
-	'.axl-picker{width:3em;height:2.2em;padding:0;border:1px solid rgba(128,128,128,.5);border-radius:4px;background:none;cursor:pointer;flex:none}',
-	'.axl-swatches{display:flex;flex-wrap:wrap;gap:.35em}',
-	'.axl-sw{width:1.7em;height:1.7em;padding:0;border-radius:50%;border:2px solid rgba(128,128,128,.5);cursor:pointer;box-sizing:border-box}',
-	'.axl-sw.active{border-color:currentColor;box-shadow:0 0 0 2px rgba(128,128,128,.45)}',
-	'.axl-hsl{display:grid;grid-template-columns:2.2em 1fr;gap:.35em .6em;align-items:center}',
-	'.axl-hsl input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:10px;border-radius:5px;margin:0;border:1px solid rgba(128,128,128,.4)}',
-	'.axl-hsl input[type=range]::-webkit-slider-runnable-track{background:transparent;height:10px}',
-	'.axl-hsl input[type=range]::-moz-range-track{background:transparent;height:10px}',
-	'.axl-hsl input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;margin-top:-4px;border-radius:50%;background:#fff;border:2px solid #555}',
-	'.axl-hsl input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:#fff;border:2px solid #555}',
-	'.axl-slider{display:flex;flex-wrap:wrap;align-items:center;gap:.5em;max-width:28em}',
-	'.axl-slider input[type=range]{flex:1 1 10em;min-width:0}',
-	'.axl-slider .cbi-input-text,.axl-color .cbi-input-text{width:7em;flex:none}',
-	'.axl-badge{display:inline-flex;flex-wrap:wrap;align-items:center;gap:.5em;padding:.3em .8em;border-radius:1em;background:rgba(128,128,128,.18)}',
-	'.axl-dot{width:1em;height:1em;border-radius:50%;border:1px solid rgba(128,128,128,.6);flex:none}',
-	'.axl-badge.err{background:rgba(220,60,60,.2)}',
-	'.axl-leds{display:flex;flex-direction:column;gap:.6em}',
-	'.axl-led{display:flex;flex-wrap:wrap;align-items:center;gap:.5em 1em}',
-	'.axl-led>label{flex:1 1 12em;min-width:0}',
-	'.axl-led select,.axl-led input{flex:0 1 12em;min-width:0}',
-	/* X light: virtual X on the left, controls on the right; stacked on phones */
-	'.axl-split{display:flex;align-items:flex-start;gap:1.5em}',
-	'.axl-split>.cbi-section-node{flex:1 1 auto;min-width:0}',
-	'.axl-vx{flex:none;width:200px;max-width:100%;margin:0;text-align:center}',
-	'.axl-vx svg{display:block;width:100%;height:auto;aspect-ratio:1;border-radius:14%;box-shadow:0 0 0 1px rgba(128,128,128,.35),0 4px 14px rgba(0,0,0,.25)}',
-	'.axl-vx figcaption{margin-top:.5em;font-size:.85em;opacity:.7}',
-	'@media (max-width:600px){.axl-split{flex-direction:column;align-items:stretch}.axl-vx{align-self:center;width:min(200px,60vw)}}'
+	'.axl{--axl-accent:#2f7bf6;--axl-line:rgba(128,128,128,.3);--axl-card:rgba(128,128,128,.07);--axl-well:rgba(128,128,128,.1);--axl-bad:#d64545}',
+	'.axl *{box-sizing:border-box}',
+	'.axl [hidden]{display:none !important}',
+	'.axl-stack{display:grid;gap:1rem}',
+	'.axl-grid2{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:1rem;align-items:start}',
+	'@media (max-width:900px){.axl-grid2{grid-template-columns:1fr}}',
+	'.axl-card{border:1px solid var(--axl-line);background:var(--axl-card);border-radius:.5rem;padding:1rem 1.1rem;display:grid;gap:.9rem;min-width:0}',
+	'.axl-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem 1rem}',
+	'.axl-head h3{margin:0;font-size:1.05rem;padding:0;border:0}',
+	'.axl-head p{margin:.15rem 0 0;font-size:.85rem;opacity:.7}',
+	'.axl-field{display:grid;grid-template-columns:8rem minmax(0,1fr);align-items:center;gap:.5rem 1rem}',
+	'.axl-field>.l{opacity:.75}',
+	'.axl-field.top{align-items:start}.axl-field.top>.l{padding-top:.3rem}',
+	'@media (max-width:560px){.axl-field{grid-template-columns:1fr}}',
+	'.axl-help{font-size:.85rem;opacity:.7;margin:0}',
+	'.axl-row{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}',
+	'.axl-row input,.axl-row button,.axl-row select{margin:0}',
+	'.axl-seg{justify-self:start;display:inline-flex;flex-wrap:wrap;border:1px solid var(--axl-line);border-radius:.4rem;overflow:hidden}',
+	'.axl-seg button{margin:0;border:0;border-right:1px solid var(--axl-line);border-radius:0;background:transparent;color:inherit;padding:.4rem .8rem;cursor:pointer;font:inherit;line-height:1.3}',
+	'.axl-seg button:last-child{border-right:0}',
+	'.axl-seg button[aria-pressed=true]{background:var(--axl-accent);color:#fff}',
+	'.axl-seg button:focus-visible{outline:2px solid var(--axl-accent);outline-offset:-2px}',
+	'.axl-chip{display:inline-flex;align-items:center;gap:.4rem;border-radius:1rem;padding:.15rem .7rem;font-size:.85rem;background:var(--axl-well)}',
+	'.axl-chip.err{background:rgba(214,69,69,.2)}',
+	'.axl-dot{width:.65rem;height:.65rem;border-radius:50%;flex:none;border:1px solid rgba(128,128,128,.5)}',
+	'.axl-switch{display:inline-flex;align-items:center;gap:.5rem;cursor:pointer;margin:0}',
+	'.axl-switch input{position:absolute;opacity:0;width:1px;height:1px}',
+	'.axl-switch .tr{position:relative;flex:none;width:2.6rem;height:1.45rem;border-radius:1rem;background:var(--axl-line);transition:background .15s}',
+	'.axl-switch .tr::after{content:"";position:absolute;top:.17rem;left:.17rem;width:1.1rem;height:1.1rem;border-radius:50%;background:#fff;transition:transform .15s}',
+	'.axl-switch input:checked+.tr{background:var(--axl-accent)}',
+	'.axl-switch input:checked+.tr::after{transform:translateX(1.15rem)}',
+	'.axl-switch input:focus-visible+.tr{outline:2px solid var(--axl-accent);outline-offset:2px}',
+	'.axl-slider{display:flex;align-items:center;gap:1rem;max-width:30rem}',
+	'.axl-slider input[type=range]{flex:1;min-width:0}',
+	'.axl-slider output{min-width:3.5rem;text-align:right;font-weight:600;font-variant-numeric:tabular-nums}',
+	/* X light: preview on the left, controls on the right */
+	'.axl-xl{display:grid;grid-template-columns:13rem minmax(0,1fr);gap:1.5rem;align-items:start}',
+	'@media (max-width:720px){.axl-xl{grid-template-columns:1fr}.axl-vx{max-width:13rem;margin:0 auto}}',
+	'.axl-vx{display:grid;gap:.6rem;justify-items:center}',
+	'.axl-vx svg{display:block;width:100%;height:auto;aspect-ratio:1;border-radius:14%;box-shadow:0 0 0 1px var(--axl-line),0 4px 14px rgba(0,0,0,.25)}',
+	'.axl-vx .cap{font-size:.8rem;opacity:.7;text-align:center}',
+	'.axl-vx .cbi-button{margin:0}',
+	/* colour picker */
+	'.axl-picker{display:grid;grid-template-columns:auto minmax(0,1fr);gap:1rem;align-items:start}',
+	'@media (max-width:520px){.axl-picker{grid-template-columns:1fr}}',
+	'.axl-wheel{width:10.5rem;height:10.5rem;border-radius:50%;position:relative;cursor:crosshair;touch-action:none;box-shadow:0 0 0 1px var(--axl-line);',
+	'  background:radial-gradient(circle closest-side,#fff 0%,rgba(255,255,255,0) 100%),conic-gradient(from 90deg,#f00,#f0f,#00f,#0ff,#0f0,#ff0,#f00)}',
+	'.axl-wheel:focus-visible{outline:2px solid var(--axl-accent);outline-offset:3px}',
+	'.axl-knob{position:absolute;width:1.25rem;height:1.25rem;margin:-.625rem 0 0 -.625rem;border-radius:50%;border:3px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.6),0 2px 6px rgba(0,0,0,.5);pointer-events:none}',
+	'.axl-pside{display:grid;gap:.75rem;align-content:start;min-width:0}',
+	'.axl-hex{display:flex;align-items:center;gap:.5rem}',
+	'.axl-hex .big{width:2.4rem;height:2rem;border-radius:.35rem;border:1px solid var(--axl-line);flex:none}',
+	'.axl-hex input{width:7rem !important;margin:0;font-family:monospace}',
+	'.axl-sws{display:grid;grid-template-columns:repeat(auto-fill,1.9rem);gap:.5rem}',
+	'.axl-sw{width:1.9rem;height:1.9rem;border-radius:.4rem;border:1px solid rgba(0,0,0,.35);cursor:pointer;padding:0;margin:0;position:relative}',
+	'.axl-sw[aria-pressed=true]::after{content:"";position:absolute;inset:-.25rem;border:2px solid currentColor;border-radius:.55rem}',
+	'.axl-sw:focus-visible{outline:2px solid var(--axl-accent);outline-offset:2px}',
+	'.axl-recent{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;font-size:.8rem;opacity:.85}',
+	'.axl-recent .axl-sw{width:1.4rem;height:1.4rem;border-radius:.3rem}',
+	/* events */
+	'.axl-evts{display:grid;grid-template-columns:auto minmax(9rem,1.3fr) minmax(8rem,1fr) auto minmax(6.5rem,.8fr) 5.5rem;gap:0 .9rem;align-items:center}',
+	'.axl-evt{display:contents}',
+	'.axl-evt>*{padding:.6rem 0;border-top:1px solid var(--axl-line);align-self:stretch;display:flex;align-items:center;min-width:0}',
+	'.axl-evt.head>*{border-top:0;padding-top:0;font-size:.8rem;opacity:.7}',
+	'.axl-evt .nm{flex-direction:column;align-items:flex-start;justify-content:center;gap:.1rem}',
+	'.axl-evt .nm small{opacity:.7}',
+	'.axl-evt .nm label{display:flex;align-items:center;gap:.35rem;font-size:.8rem;margin:0;opacity:.85}',
+	'.axl-evt .nm label input{margin:0}',
+	'.axl-evt select,.axl-evt input[type=number]{width:100%;margin:0;min-width:0}',
+	'.axl-cbtn{width:2.4rem;height:1.9rem;border-radius:.35rem;border:1px solid var(--axl-line);cursor:pointer;padding:0;margin:0}',
+	'.axl-cbtn[disabled]{opacity:.3;cursor:not-allowed}',
+	'@media (max-width:820px){.axl-evts{grid-template-columns:auto minmax(0,1fr) minmax(0,1fr)}.axl-evt.head{display:none}',
+	'  .axl-evt>*{border-top:0;padding:.3rem 0}.axl-evt>.sw{border-top:1px solid var(--axl-line);padding-top:.6rem}.axl-evt>.nm{grid-column:2 / 4;border-top:1px solid var(--axl-line);padding-top:.6rem}',
+	'  .axl-evt>.ef,.axl-evt>.sp{grid-column:2 / 4}.axl-evt>.co,.axl-evt>.pr{grid-column:auto}}',
+	/* front indicators: lamp | name | colour | action | port */
+	'.axl-inds{display:grid;grid-template-columns:1.65rem minmax(4.5rem,1fr) auto minmax(8rem,10rem) minmax(6.5rem,8rem);gap:0;align-items:center}',
+	'.axl-ind{display:contents}',
+	'.axl-ind>*{padding:.6rem .75rem .6rem 0;border-top:1px solid var(--axl-line);align-self:stretch;display:flex;align-items:center;min-width:0}',
+	'.axl-ind>*:last-child{padding-right:0}',
+	'.axl-ind:first-child>*{border-top:0}',
+	'.axl-ind .nm{flex-direction:column;align-items:flex-start;justify-content:center}',
+	'.axl-ind .nm small{opacity:.7}',
+	'.axl-ind .lamp{width:.85rem;height:.85rem;border-radius:50%;box-shadow:0 0 0 1px rgba(128,128,128,.5);transition:opacity .15s}',
+	'.axl-ind select{width:100%;margin:0;min-width:0}',
+	'.axl-ind .port.off>*{visibility:hidden}',
+	'@media (max-width:1100px){.axl-inds{grid-template-columns:1.65rem minmax(0,1fr) minmax(0,1fr)}',
+	'  .axl-ind>*{border-top:0;padding-top:.3rem;padding-bottom:.3rem}.axl-ind>:first-child,.axl-ind>.nm{border-top:1px solid var(--axl-line);padding-top:.7rem}',
+	'  .axl-ind>.nm{grid-column:2 / 4}.axl-ind>:nth-child(3){grid-column:2 / 4}.axl-ind>:nth-child(4){grid-column:2}.axl-ind .port.off{visibility:hidden}}',
+	'@media (prefers-reduced-motion:reduce){.axl *{transition:none !important}}'
 ].join('\n');
 
-/* ---- virtual X: renders the current form values with the router's maths ---- */
+/* ---- virtual X: renders the unsaved values with the router's maths ---- */
 
 var SVG_NS = 'http://www.w3.org/2000/svg', vxSeq = 0;
 
@@ -153,8 +254,8 @@ function vxBars(attrs) {
 	}));
 }
 
-/* read() returns { effect, color, speed, brightness } from the form (unsaved
- * values). The loop stops by itself once the widget leaves the document. */
+/* read() returns { effect, color, speed, brightness } (brightness 0..255).
+ * The loop stops by itself once the widget leaves the document. */
 function virtualX(read) {
 	var fid = 'axl-vx-glow-' + (++vxSeq),
 	    glow = vxBars({ 'stroke-width': 14, 'stroke-linecap': 'round', 'filter': 'url(#' + fid + ')', 'opacity': 0 }),
@@ -174,9 +275,7 @@ function virtualX(read) {
 	        vxBars({ 'stroke': '#2c3038', 'stroke-width': 14, 'stroke-linecap': 'round' }),
 	        glow, core
 	    ]),
-	    node = E('figure', { 'class': 'axl-vx' }, [ svg, E('figcaption', {}, _('Preview of the X light')) ]),
-	    vals = { effect: 'off', color: '#000000', speed: '1', brightness: '0' },
-	    t0 = null, attached = false, born = Date.now(), lastKey = null;
+	    vals = {}, t0 = null, attached = false, born = Date.now(), lastKey = null;
 
 	function tick(now) {
 		if (svg.isConnected)
@@ -188,14 +287,12 @@ function virtualX(read) {
 		if (!attached || document.hidden)
 			return;
 
-		var v = read() || vals;
-		if (!HEX_RE.test(v.color || ''))
-			v.color = vals.color;	/* keep the last valid color while typing */
+		var v = read();
 		if (t0 == null || v.effect != vals.effect || v.speed != vals.speed)
 			t0 = now;	/* restart the effect like a preview does */
 		vals = v;
 
-		var f = ledfx.visual(v.effect, v.color, now - t0, ledfx.parseSpeed(v.speed), v.brightness),
+		var f = ledfx.visual(v.effect, v.color, now - t0, v.speed, v.brightness),
 		    col = 'rgb(' + f.rgb.join(',') + ')',
 		    hot = 'rgb(' + f.rgb.map(function(c) { return Math.round(c + (255 - c) * 0.55); }).join(',') + ')',
 		    key = col + '/' + f.level.toFixed(3);
@@ -210,581 +307,694 @@ function virtualX(read) {
 	}
 
 	window.requestAnimationFrame(tick);
+	return svg;
+}
+
+/* ---- colour picker: hue/saturation wheel, swatches, hex, recent ---- */
+
+function colorPicker(start, onchange) {
+	var hs = hexToHs(start), cur = start;
+	var knob = E('div', { 'class': 'axl-knob' });
+	var wheel = E('div', { 'class': 'axl-wheel', 'tabindex': '0', 'role': 'slider',
+		'aria-label': _('Hue and saturation: arrow keys change the hue (left/right) and saturation (up/down)') }, knob);
+	var big = E('span', { 'class': 'big' });
+	var hex = E('input', { 'class': 'cbi-input-text', 'type': 'text', 'spellcheck': 'false', 'maxlength': '7',
+		'aria-label': _('Color as #rrggbb') });
+	var swatches = [];
+	var presets = [
+		[ '#ff0000', _('Red') ], [ '#ff5a00', _('Orange') ], [ '#ffa000', _('Amber') ],
+		[ '#ffff00', _('Yellow') ], [ '#00ff00', _('Green') ], [ '#00ffff', _('Cyan') ],
+		[ '#0000ff', _('Blue') ], [ '#8000ff', _('Purple') ], [ '#ff00ff', _('Magenta') ],
+		[ '#ffffff', _('White') ]
+	];
+
+	var mkSw = function(c, label) {
+		var b = E('button', { 'type': 'button', 'class': 'axl-sw', 'style': 'background:' + c,
+			'title': label, 'aria-label': label, 'data-c': c, 'aria-pressed': 'false',
+			'click': function(ev) { ev.preventDefault(); set(c, true); } });
+		swatches.push(b);
+		return b;
+	};
+
+	var swRow = E('div', { 'class': 'axl-sws' }, presets.map(function(p) { return mkSw(p[0], p[1]); }));
+	var recent = readRecent();
+	var recentRow = recent.length
+		? E('div', { 'class': 'axl-recent' }, [ _('Recent') ].concat(recent.map(function(c) { return mkSw(c, c); })))
+		: '';
+
+	function paint() {
+		var a = hs[0] * Math.PI / 180, r = hs[1] / 100 * 50;
+		knob.style.left = (50 + Math.cos(-a) * r) + '%';
+		knob.style.top = (50 + Math.sin(-a) * r) + '%';
+		knob.style.background = cur;
+		big.style.background = cur;
+		if (document.activeElement !== hex)
+			hex.value = cur;
+		hex.classList.remove('cbi-input-invalid');
+		swatches.forEach(function(b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-c') == cur)); });
+		wheel.setAttribute('aria-valuetext', cur);
+	}
+
+	function set(c, fire) {
+		cur = c.toLowerCase();
+		var n = hexToHs(cur);
+		if (n[1] == 0)
+			n[0] = hs[0];	/* hue undefined for white: keep the knob's angle */
+		hs = n;
+		paint();
+		if (fire) onchange(cur);
+	}
+
+	function fromHs(fire) {
+		cur = hsToHex(hs[0], hs[1]);
+		paint();
+		if (fire) onchange(cur);
+	}
+
+	function pick(ev) {
+		var r = wheel.getBoundingClientRect(),
+		    x = ev.clientX - r.left - r.width / 2, y = ev.clientY - r.top - r.height / 2;
+		hs = [ Math.round((Math.atan2(-y, x) * 180 / Math.PI + 360) % 360),
+		       Math.round(Math.min(1, Math.hypot(x, y) / (r.width / 2)) * 100) ];
+		fromHs(true);
+	}
+
+	wheel.addEventListener('pointerdown', function(ev) { ev.preventDefault(); wheel.focus(); wheel.setPointerCapture(ev.pointerId); pick(ev); });
+	wheel.addEventListener('pointermove', function(ev) { if (ev.buttons) pick(ev); });
+	wheel.addEventListener('keydown', function(ev) {
+		switch (ev.key) {
+		case 'ArrowLeft':  hs[0] = (hs[0] + 355) % 360; break;
+		case 'ArrowRight': hs[0] = (hs[0] + 5) % 360; break;
+		case 'ArrowUp':    hs[1] = Math.min(100, hs[1] + 5); break;
+		case 'ArrowDown':  hs[1] = Math.max(0, hs[1] - 5); break;
+		default: return;
+		}
+		ev.preventDefault();
+		fromHs(true);
+	});
+	hex.addEventListener('input', function() {
+		var v = hex.value.trim();
+		if (/^[0-9a-fA-F]{6}$/.test(v)) v = '#' + v;
+		if (HEX_RE.test(v)) set(v, true);
+		else hex.classList.add('cbi-input-invalid');
+	});
+	hex.addEventListener('blur', function() { hex.value = cur; hex.classList.remove('cbi-input-invalid'); });
+
+	var node = E('div', { 'class': 'axl-picker' }, [
+		wheel,
+		E('div', { 'class': 'axl-pside' }, [
+			E('div', { 'class': 'axl-hex' }, [ big, hex ]),
+			swRow,
+			recentRow,
+			E('p', { 'class': 'axl-help' }, _('Around the wheel picks the hue; towards the center makes it paler.'))
+		])
+	]);
+
+	set(HEX_RE.test(start) ? start : '#0000ff', false);
+	node.getValue = function() { return cur; };
 	return node;
 }
 
-/* Hex text field + native picker, preset swatches and H/S/L sliders.
- * The text field stays the real form widget, so formvalue() keeps working. */
-var ColorValue = form.Value.extend({
-	compact: false,
-
-	validate: function(section_id, value) {
-		return HEX_RE.test(value) ? true : _('Enter a color as #rrggbb, for example #0000ff.');
+return view.extend({
+	load: function() {
+		return Promise.all([
+			uci.load('ax9000'),
+			uci.load('system'),
+			L.resolveDefault(uci.load('network'), null),
+			L.resolveDefault(callStatus(), null),
+			L.resolveDefault(callLeds(), {})
+		]);
 	},
 
-	write: function(section_id, value) {
-		return form.Value.prototype.write.call(this, section_id, String(value).toLowerCase());
-	},
-
-	renderWidget: function(section_id, option_index, cfgvalue) {
+	render: function(data) {
 		var self = this;
 
-		return Promise.resolve(form.Value.prototype.renderWidget.apply(this, arguments)).then(function(node) {
-			var inst = dom.findClassInstance(node),
-			    text = node.querySelector('input'),
-			    start = HEX_RE.test(cfgvalue || '') ? cfgvalue.toLowerCase() : '#0000ff',
-			    hsl = hexToHsl(start),
-			    picker = E('input', { 'type': 'color', 'class': 'axl-picker', 'value': start,
-			                          'aria-label': _('Pick a color') }),
-			    swatches = [], sliders = {};
+		this.status = data[3];
+		this.leds = data[4] || {};
+		this.readConfig();
+		this.root = E('div', { 'class': 'axl' });
+		this.build();
 
-			function paint() {
-				var h = hsl[0], s = hsl[1], l = hsl[2];
-				if (!sliders.h) return;
-				sliders.h.style.background = 'linear-gradient(to right,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)';
-				sliders.s.style.background = 'linear-gradient(to right,hsl(' + h + ',0%,' + l + '%),hsl(' + h + ',100%,' + l + '%))';
-				sliders.l.style.background = 'linear-gradient(to right,#000,hsl(' + h + ',' + s + '%,50%),#fff)';
-			}
-
-			function apply(hex, from) {
-				hex = hex.toLowerCase();
-				if (from != 'text' && from != 'init') {
-					inst.setValue(hex);
-					inst.triggerValidation();
-				}
-				if (from != 'picker')
-					picker.value = hex;
-				if (from != 'hsl') {
-					var n = hexToHsl(hex);
-					if (n[1] == 0 || n[2] == 0 || n[2] == 100)
-						n[0] = hsl[0];	/* hue is undefined here: keep the slider where it was */
-					hsl = n;
-					if (sliders.h) {
-						sliders.h.value = hsl[0];
-						sliders.s.value = hsl[1];
-						sliders.l.value = hsl[2];
-					}
-				}
-				swatches.forEach(function(sw) {
-					sw.classList.toggle('active', sw.dataset.color == hex);
-				});
-				paint();
-			}
-
-			picker.addEventListener('input', function() { apply(picker.value, 'picker'); });
-			text.addEventListener('input', function() {
-				if (HEX_RE.test(text.value)) apply(text.value, 'text');
+		poll.add(function() {
+			return L.resolveDefault(callStatus(), null).then(function(st) {
+				self.status = st;
+				self.updateStatus();
 			});
+		}, 3);
 
-			var top = E('div', { 'class': 'axl-row' }, [ picker, node ]);
+		return this.root;
+	},
 
-			if (self.compact)
-				return top;
+	/* ---------- state (unsaved values) ---------- */
 
-			var presets = [
-				[ '#ff0000', _('Red') ], [ '#ff6a00', _('Orange') ], [ '#ffa000', _('Amber') ],
-				[ '#ffff00', _('Yellow') ], [ '#00ff00', _('Green') ], [ '#00ffff', _('Cyan') ],
-				[ '#0000ff', _('Blue') ], [ '#8000ff', _('Purple') ], [ '#ff00ff', _('Magenta') ],
-				[ '#ffffff', _('White') ]
-			];
+	readConfig: function() {
+		var g = function(o, d) { var v = uci.get('ax9000', 'led', o); return v == null || v === '' ? d : v; };
+		var sp = parseFloat(g('speed', '1')), br = parseInt(g('brightness', '255'), 10);
 
-			var swRow = E('div', { 'class': 'axl-swatches' }, presets.map(function(p) {
-				var b = E('button', { 'type': 'button', 'class': 'axl-sw', 'title': p[1],
-				                      'aria-label': p[1], 'data-color': p[0],
-				                      'style': 'background:' + p[0] });
-				b.addEventListener('click', function(ev) { ev.preventDefault(); apply(p[0], 'swatch'); });
-				swatches.push(b);
-				return b;
-			}));
-
-			var grid = E('div', { 'class': 'axl-hsl' });
-			[ [ 'h', _('H'), 360, _('Hue') ], [ 's', _('S'), 100, _('Saturation') ],
-			  [ 'l', _('L'), 100, _('Lightness') ] ].forEach(function(d, i) {
-				var r = E('input', { 'type': 'range', 'min': 0, 'max': d[2], 'step': 1,
-				                     'value': hsl[i], 'aria-label': d[3], 'title': d[3] });
-				r.addEventListener('input', function() {
-					hsl[i] = +r.value;
-					apply(hslToHex(hsl[0], hsl[1], hsl[2]), 'hsl');
-				});
-				sliders[d[0]] = r;
-				grid.appendChild(E('span', {}, d[1]));
-				grid.appendChild(r);
-			});
-
-			apply(start, 'init');
-
-			return E('div', { 'class': 'axl-color' }, [ top, swRow, grid ]);
+		this.x = {
+			effect: ledfx.EFFECTS.indexOf(g('effect', 'static')) >= 0 ? g('effect', 'static') : 'static',
+			color: HEX_RE.test(g('color', '')) ? g('color').toLowerCase() : '#0000ff',
+			speed: sp >= SPEED_MIN && sp <= SPEED_MAX ? sp : 1,
+			brightness: br >= 0 && br <= 255 ? br : 255
+		};
+		this.nightCfg = {
+			enabled: g('night_enabled', '0') == '1',
+			start: padTime(g('night_start', '23:00')),
+			end: padTime(g('night_end', '07:00')),
+			mode: g('night_mode', 'off') == 'dim' ? 'dim' : 'off'
+		};
+		this.wan = g('wan_iface', 'wan');
+		this.events = uci.sections('ax9000', 'led_event').map(function(s) {
+			var spd = parseFloat(s.speed);
+			return {
+				name: s['.name'],
+				enabled: s.enabled == '1',
+				priority: parseInt(s.priority, 10) || 0,
+				effect: ledfx.EFFECTS.indexOf(s.effect) >= 0 ? s.effect : 'static',
+				color: HEX_RE.test(s.color || '') ? s.color.toLowerCase() : '#ffffff',
+				speed: spd >= SPEED_MIN && spd <= SPEED_MAX ? spd : 1,
+				override_night: s.override_night == '1'
+			};
 		});
-	}
-});
-
-/* Text field plus range slider. `log` maps the slider logarithmically. */
-var SliderValue = form.Value.extend({
-	min: 0, max: 100, log: false, unit: '',
-
-	toPos: function(v) {
-		return this.log ? Math.log(v / this.min) / Math.log(this.max / this.min) * 1000
-		                : (v - this.min) / (this.max - this.min) * 1000;
 	},
 
-	fromPos: function(p) {
-		var v = this.log ? this.min * Math.pow(this.max / this.min, p / 1000)
-		                 : this.min + (this.max - this.min) * p / 1000;
-		return this.log ? +v.toPrecision(2) : Math.round(v);
+	/* ---------- layout ---------- */
+
+	build: function() {
+		this.refs = {};
+		var kids = [
+			E('style', {}, CSS),
+			E('h2', { 'name': 'content' }, _('LED')),
+			E('div', { 'class': 'cbi-map-descr' }, _('The X light on top of the router, its night mode, event signals and the small status LEDs.')),
+			E('div', { 'class': 'axl-stack' }, [
+				this.buildX(),
+				E('div', { 'class': 'axl-grid2' }, [ this.buildNight(), this.buildIndicators() ]),
+				this.buildEvents()
+			])
+		];
+		this.root.textContent = '';
+		kids.forEach(function(k) { this.root.appendChild(k); }, this);
+		this.syncX();
+		this.updateStatus();
 	},
 
-	renderWidget: function(section_id, option_index, cfgvalue) {
+	card: function(title, descr, extra, kids) {
+		return E('div', { 'class': 'axl-card' }, [
+			E('div', { 'class': 'axl-head' }, [
+				E('div', {}, [ E('h3', {}, title), descr ? E('p', {}, descr) : '' ]),
+				extra || ''
+			])
+		].concat(kids));
+	},
+
+	seg: function(label, items, value, onpick) {
+		var group = E('div', { 'class': 'axl-seg', 'role': 'group', 'aria-label': label });
+		var btns = items.map(function(it) {
+			var b = E('button', {
+				'type': 'button', 'aria-pressed': String(it[0] == value), 'data-v': it[0],
+				'click': function(ev) {
+					ev.preventDefault();
+					btns.forEach(function(x) { x.setAttribute('aria-pressed', String(x === b)); });
+					onpick(it[0]);
+				}
+			}, it[1]);
+			return b;
+		});
+		btns.forEach(function(b) { group.appendChild(b); });
+		return group;
+	},
+
+	field: function(label, widget, cls) {
+		return E('div', { 'class': 'axl-field' + (cls ? ' ' + cls : '') }, [ E('span', { 'class': 'l' }, label), widget ]);
+	},
+
+	switchEl: function(id, checked, text, onchange) {
+		var cb = E('input', { 'type': 'checkbox', 'id': id, 'change': function() { onchange(cb.checked); } });
+		cb.checked = checked;
+		return E('label', { 'class': 'axl-switch' }, [ cb, E('span', { 'class': 'tr' }), text ? E('span', {}, text) : '' ]);
+	},
+
+	/* ---------- X light ---------- */
+
+	buildX: function() {
+		var self = this, x = this.x;
+
+		this.refs.chip = E('span', { 'class': 'axl-chip', 'role': 'status' });
+
+		var tryBtn = E('button', {
+			'class': 'cbi-button cbi-button-action', 'type': 'button',
+			'click': function(ev) { ev.preventDefault(); self.preview(tryBtn); }
+		}, _('Try on router · %d s').format(PREVIEW_SECONDS));
+
+		this.refs.offSw = this.switchEl('axl-off', false, _('Off until reboot'), function(on) {
+			callOff(on).then(function() { return self.refreshStatus(); }).catch(function(e) {
+				ui.addNotification(null, E('p', {}, e.message), 'danger');
+			});
+		});
+
+		var vx = E('div', { 'class': 'axl-vx' }, [
+			virtualX(function() { return x; }),
+			E('div', { 'class': 'cap' }, _('Live preview of the unsaved settings')),
+			tryBtn,
+			this.refs.offSw
+		]);
+
+		var effect = this.seg(_('Effect'), effects(), x.effect, function(v) { x.effect = v; self.syncX(); });
+
+		this.refs.colorField = this.field(_('Color'),
+			colorPicker(x.color, function(c) { x.color = c; }), 'top');
+
+		var spOut = E('output', {}, x.speed + '×');
+		var sp = E('input', { 'type': 'range', 'min': '0', 'max': '1000', 'step': '1', 'value': String(speedToPos(x.speed)),
+			'aria-label': _('Speed'),
+			'input': function() { x.speed = posToSpeed(+sp.value); spOut.textContent = x.speed + '×'; } });
+		this.refs.speedField = this.field(_('Speed'), E('div', {}, [
+			E('div', { 'class': 'axl-slider' }, [ sp, spOut ]),
+			E('p', { 'class': 'axl-help' }, _('Slow 0.1× … fast 10×'))
+		]));
+
+		var brOut = E('output', {}, Math.round(x.brightness / 2.55) + ' %');
+		var br = E('input', { 'type': 'range', 'min': '0', 'max': '100', 'step': '1', 'value': String(Math.round(x.brightness / 2.55)),
+			'aria-label': _('Brightness'),
+			'input': function() { x.brightness = Math.round(+br.value * 2.55); brOut.textContent = br.value + ' %'; } });
+		this.refs.brightField = this.field(_('Brightness'), E('div', { 'class': 'axl-slider' }, [ br, brOut ]));
+
+		return this.card(_('X light'), _('Changes show in the preview at once and on the router after Save & Apply.'), this.refs.chip, [
+			E('div', { 'class': 'axl-xl' }, [
+				vx,
+				E('div', { 'class': 'axl-stack', 'style': 'gap:1.1rem' }, [
+					this.field(_('Effect'), effect),
+					this.refs.colorField,
+					this.refs.speedField,
+					this.refs.brightField
+				])
+			])
+		]);
+	},
+
+	syncX: function() {
+		var e = this.x.effect;
+		this.refs.colorField.hidden = !usesColor(e);
+		this.refs.speedField.hidden = !usesSpeed(e);
+		this.refs.brightField.hidden = e == 'off';
+	},
+
+	preview: function(btn) {
+		var self = this, x = this.x;
+		var same = ledfx.sameAsRunning(x, this.status, uci.get('ax9000', 'led', 'speed'));
+
+		if (same)
+			ui.addTimeLimitedNotification(null, E('p', {},
+				_('The light already shows these settings. Change the color or effect to see a preview.')), 6000, 'info');
+
+		btn.disabled = true;
+		callPreview(x.effect, x.color, String(x.speed), x.brightness, PREVIEW_SECONDS).then(function(res) {
+			if (res && res.ok && !same)
+				ui.addTimeLimitedNotification(null, E('p', {},
+					_('The router shows the unsaved settings for %d seconds, then the saved ones return.').format(PREVIEW_SECONDS)), 4000, 'info');
+			else if (!(res && res.ok))
+				ui.addNotification(null, E('p', {}, _('Preview failed: %s').format((res && res.error || 'unknown') +
+					(res && res.argument ? ' (' + res.argument + ')' : ''))), 'danger');
+			return self.refreshStatus();
+		}).catch(function(e) {
+			ui.addNotification(null, E('p', {}, _('Preview failed: %s').format(e.message)), 'danger');
+		}).finally(function() { btn.disabled = false; });
+	},
+
+	refreshStatus: function() {
 		var self = this;
-
-		return Promise.resolve(form.Value.prototype.renderWidget.apply(this, arguments)).then(function(node) {
-			var inst = dom.findClassInstance(node),
-			    text = node.querySelector('input'),
-			    v = parseFloat(cfgvalue),
-			    range = E('input', { 'type': 'range', 'min': 0, 'max': 1000, 'step': 1,
-			                         'aria-label': self.title });
-
-			function place(val) {
-				if (isFinite(val))
-					range.value = Math.max(0, Math.min(1000, self.toPos(Math.min(self.max, Math.max(self.min, val)))));
-			}
-
-			place(isFinite(v) ? v : self.min);
-			range.addEventListener('input', function() {
-				inst.setValue(String(self.fromPos(+range.value)));
-				inst.triggerValidation();
-			});
-			text.addEventListener('input', function() { place(parseFloat(text.value)); });
-
-			return E('div', { 'class': 'axl-slider' }, [ range, node, self.unit ? E('span', {}, self.unit) : '' ]);
+		return L.resolveDefault(callStatus(), null).then(function(st) {
+			self.status = st;
+			self.updateStatus();
 		});
-	}
-});
-
-/* Status badge + preview buttons, kept outside of UCI (DummyValue never saves). */
-var StatusValue = form.DummyValue.extend({
-	badge: null,
-
-	renderWidget: function() {
-		this.badge = E('span', { 'class': 'axl-badge' });
-		this.update(this.initial);
-		return this.badge;
 	},
 
-	update: function(st) {
-		var b = this.badge;
-		this.initial = st;
-		if (!b) return;
-		dom.content(b, []);
-		b.classList.remove('err');
+	updateStatus: function() {
+		var st = this.status, chip = this.refs.chip;
+		if (!chip)
+			return;
+
+		chip.textContent = '';
+		chip.className = 'axl-chip';
 
 		if (!st || st.error) {
-			b.classList.add('err');
-			b.appendChild(E('span', {}, st && st.error == 'no_rgb_led'
+			chip.classList.add('err');
+			chip.appendChild(E('span', {}, st && st.error == 'no_rgb_led'
 				? _('X light not found: the PWM LED device is missing in this image.')
 				: _('The LED service is not running.')));
 			return;
 		}
 
-		var color = /^#?[0-9a-fA-F]{6}$/.test(st.color || '') ? st.color.replace(/^#?/, '#') : null,
-		    parts = [ effectLabel(st.effect) ];
-
+		var parts = [ _('Running: %s').format(effectLabel(st.effect)) ];
+		if (st.preview) parts = [ _('Preview') ];
+		if (st.off) parts = [ _('Off until reboot') ];
 		if (st.night) parts.push(_('night mode'));
-		(st.events_active || []).forEach(function(e) { parts.push(eventLabel(e)); });
+		(st.events_active || []).forEach(function(e) { parts.push(eventInfo(e)[0]); });
 
-		if (color && st.effect != 'off' && st.brightness > 0)
-			b.appendChild(E('span', { 'class': 'axl-dot', 'style': 'background:' + color }));
-		b.appendChild(E('span', {}, parts.join(' · ')));
-	}
-});
+		if (HEX_RE.test(st.color || '') && st.effect != 'off' && st.brightness > 0 && !st.off)
+			chip.appendChild(E('span', { 'class': 'axl-dot', 'style': 'background:' + st.color }));
+		chip.appendChild(E('span', {}, parts.join(' · ')));
 
-var PreviewValue = form.DummyValue.extend({
-	renderWidget: function() {
-		var self = this,
-		    btn = E('button', { 'class': 'cbi-button cbi-button-action', 'type': 'button' }, _('Preview')),
-		    off = E('button', { 'class': 'cbi-button', 'type': 'button' }, _('Off until reboot')),
-		    on = E('button', { 'class': 'cbi-button', 'type': 'button' }, _('Turn back on'));
+		var cb = this.refs.offSw.querySelector('input');
+		if (document.activeElement !== cb)
+			cb.checked = !!st.off;
+	},
 
-		btn.addEventListener('click', function(ev) {
-			ev.preventDefault();
-			var v = self.collect();
-			if (!v) return;
-			/* Same as what the light already runs: the preview would look like
-			 * nothing happened, so say so (the call is still sent). */
-			var same = ledfx.sameAsRunning(v, self.running && self.running(), uci.get('ax9000', 'led', 'speed'));
-			if (same)
-				ui.addTimeLimitedNotification(null, E('p', {},
-					_('The light already shows these settings — change the color or effect to see a preview.')),
-					6000, 'info');
-			btn.disabled = true;
-			callPreview(v.effect, v.color, String(v.speed), v.brightness, PREVIEW_SECONDS).then(function(res) {
-				if (res && res.ok && same)
-					return;
-				if (res && res.ok)
-					ui.addTimeLimitedNotification(null, E('p', {},
-						_('Previewing the current, unsaved settings for %d seconds.').format(PREVIEW_SECONDS)),
-						4000, 'info');
-				else
-					ui.addNotification(null, E('p', {},
-						_('Preview failed: %s').format((res && res.error || 'unknown') +
-							(res && res.argument ? ' (' + res.argument + ')' : ''))), 'danger');
-			}).catch(function(e) {
-				ui.addNotification(null, E('p', {}, _('Preview failed: %s').format(e.message)), 'danger');
-			}).finally(function() { btn.disabled = false; });
-		});
+	/* ---------- night ---------- */
 
-		function toggle(state) {
-			return function(ev) {
-				ev.preventDefault();
-				callOff(state).catch(function(e) {
-					ui.addNotification(null, E('p', {}, e.message), 'danger');
-				});
-			};
-		}
-		off.addEventListener('click', toggle(true));
-		on.addEventListener('click', toggle(false));
+	buildNight: function() {
+		var n = this.nightCfg;
+		var start = E('input', { 'class': 'cbi-input-text', 'type': 'time', 'value': n.start, 'aria-label': _('Night starts'),
+			'change': function() { n.start = start.value; } });
+		var end = E('input', { 'class': 'cbi-input-text', 'type': 'time', 'value': n.end, 'aria-label': _('Night ends'),
+			'change': function() { n.end = end.value; } });
+		var body = E('div', { 'class': 'axl-stack', 'style': 'gap:.75rem' }, [
+			this.field(_('Hours'), E('div', { 'class': 'axl-row' }, [ start, '–', end ])),
+			this.field(_('At night'), this.seg(_('At night'), [ [ 'off', _('Light off') ], [ 'dim', _('Dimmed') ] ], n.mode,
+				function(v) { n.mode = v; })),
+			E('p', { 'class': 'axl-help' }, _('Events marked "Show at night" still appear.'))
+		]);
+		body.hidden = !n.enabled;
+		this.refs.nightStart = start;
+		this.refs.nightEnd = end;
 
-		return E('div', { 'class': 'axl-row' }, [ btn, off, on ]);
-	}
-});
+		return this.card(_('Night mode'), _('Dim or turn off the X light at night.'),
+			this.switchEl('axl-night', n.enabled, _('On'), function(on) { n.enabled = on; body.hidden = !on; }),
+			[ body ]);
+	},
 
-/* Flag that never removes its option (the daemon reads a missing `enabled`
- * as disabled) and only stages a write when the value really changed. The
- * stock Flag removes the option whenever the box equals its default, which
- * staged uci/delete calls on every save. */
-var StoredFlag = form.Flag.extend({
-	rmempty: false,
+	/* ---------- front indicators (top / bottom) ---------- */
 
-	parse: function(section_id) {
-		if (!this.isActive(section_id))
-			return Promise.resolve();	/* hidden: keep the stored value */
-
-		var fval = this.formvalue(section_id), cval = this.cfgvalue(section_id);
-		if (cval != null && String(cval) == String(fval))
-			return Promise.resolve();
-		return Promise.resolve(this.write(section_id, fval));
-	}
-});
-
-/* Stage `opt=val` in /etc/config/system only if it differs from what is stored. */
-function setChanged(sid, opt, val) {
-	if (uci.get('system', sid, opt) !== val)
-		uci.set('system', sid, opt, val);
-}
-
-/* Other LEDs: one trigger select per sysfs LED, written as standard
- * `config led` sections of /etc/config/system (staged like any other change;
- * "Save & Apply" reloads the led service). It lives in the main Map (which
- * also loads `system`), so one Save runs one uci.save(): two Maps on a page
- * each replayed the same staged deletes and the second uci/delete failed
- * with "Resource not found". It never unsets or removes anything. */
-var OtherLeds = form.AbstractSection.extend({
-	leds: [],
-
-	/* AbstractSection's cfgsections() throws; this section has no UCI sections of its own. */
-	cfgsections: function() { return []; },
-	checkDepends: function() { return false; },
-	load: function() { return Promise.resolve(); },
-
-	findSection: function(name) {
+	findLedSection: function(name) {
 		return uci.sections('system', 'led').filter(function(s) { return s.sysfs == name; })[0];
 	},
 
-	render: function() {
+	/* What one LED does now: its `config led` section if there is one, else
+	 * what the kernel runs. Returns { action, port } or { action: 'other:x' }. */
+	ledAction: function(name) {
+		var sec = this.findLedSection(name), info = this.leds[name] || {};
+		var trig = sec ? (sec.trigger || 'none') : (info.active_trigger || 'none');
+		var on = sec ? sec['default'] == '1' : (info.brightness > 0);
+
+		switch (trig) {
+		case 'none':       return { action: on ? 'on' : 'off' };
+		case 'default-on': return { action: 'on' };
+		case 'heartbeat':  return { action: 'heartbeat' };
+		case 'timer':      return { action: 'blink' };
+		case 'netdev':     return { action: 'netdev', port: PORTS.indexOf(sec && sec.dev) >= 0 ? sec.dev : 'wan' };
+		}
+		return { action: 'other:' + trig };
+	},
+
+	/* The indicator as the page shows it: the stored choice in
+	 * /etc/config/ax9000, else derived from the two LEDs (white wins). */
+	readIndicator: function(id) {
+		var s = uci.get('ax9000', id);
+		if (s && s['.type'] == 'indicator')
+			return {
+				color: s.color == 'yellow' ? 'yellow' : 'white',
+				action: indicatorActions().some(function(a) { return a[0] == s.action; }) ? s.action : 'off',
+				port: PORTS.indexOf(s.port) >= 0 ? s.port : 'wan'
+			};
+
+		var w = this.ledAction(INDICATORS[id].white), y = this.ledAction(INDICATORS[id].yellow);
+		var pick = w.action != 'off' ? [ 'white', w ] : (y.action != 'off' ? [ 'yellow', y ] : [ 'white', w ]);
+		return { color: pick[0], action: pick[1].action, port: pick[1].port || 'wan' };
+	},
+
+	buildIndicators: function() {
 		var self = this;
-
-		this.rows = this.leds.map(function(led) {
-			var sec = self.findSection(led.name),
-			    cur = (sec && sec.trigger) || led.active || 'none',
-			    list = led.triggers.filter(function(t) { return TRIGGER_RE.test(t) || t == cur; }),
-			    sel = E('select', { 'class': 'cbi-input-select', 'id': 'axl-trig-' + led.name }),
-			    dev = E('input', { 'type': 'text', 'class': 'cbi-input-text', 'placeholder': _('Network device'),
-			                       'value': (sec && sec.dev) || 'wan', 'aria-label': _('Network device') });
-
-			if (list.indexOf(cur) < 0) list.unshift(cur);
-			list.forEach(function(t) {
-				sel.appendChild(E('option', { 'value': t, 'selected': t == cur }, t));
-			});
-
-			function sync() { dev.style.display = sel.value == 'netdev' ? '' : 'none'; }
-			sel.addEventListener('change', sync);
-			sync();
-
-			return { name: led.name, sel: sel, dev: dev, trigger: cur, devval: dev.value,
-			         node: E('div', { 'class': 'axl-led' }, [
-			             E('label', { 'for': sel.id }, ledLabel(led.name)), sel, dev ]) };
+		var ids = Object.keys(INDICATORS).filter(function(id) {
+			return self.leds[INDICATORS[id].white] && self.leds[INDICATORS[id].yellow];
 		});
 
-		return E('div', { 'class': 'cbi-section' }, [
-			E('h3', {}, _('Other LEDs')),
-			E('div', { 'class': 'cbi-section-descr' },
-				_('Choose what drives each of the other LEDs. Changes only take effect after you click Save & Apply on this page. The X light is controlled above.')),
-			this.rows.length
-				? E('div', { 'class': 'axl-leds' }, this.rows.map(function(r) { return r.node; }))
-				: E('em', {}, _('No other controllable LEDs were found.'))
+		this.indRows = ids.map(function(id) {
+			var cur = self.readIndicator(id), st = Object.assign({}, cur);
+			var lamp = E('span', { 'class': 'lamp' });
+
+			var actions = indicatorActions();
+			if (cur.action.indexOf('other:') == 0)
+				actions.unshift([ cur.action, _('Other: %s').format(cur.action.substr(6)) ]);
+			var act = E('select', { 'class': 'cbi-input-select', 'id': 'axl-ind-' + id, 'aria-label': _('%s: action').format(indicatorLabel(id)) },
+				actions.map(function(a) { return E('option', { 'value': a[0] }, a[1]); }));
+			act.value = cur.action;
+
+			var port = E('select', { 'class': 'cbi-input-select', 'aria-label': _('%s: port').format(indicatorLabel(id)) },
+				portChoices().map(function(p) { return E('option', { 'value': p[0] }, p[1]); }));
+			port.value = cur.port;
+			var portCell = E('span', { 'class': 'port' }, port);
+
+			var sync = function() {
+				portCell.classList.toggle('off', st.action != 'netdev');
+				port.disabled = st.action != 'netdev';
+				lamp.style.background = st.color == 'yellow' ? '#f0b400' : '#f2f2f2';
+				lamp.style.opacity = st.action == 'off' ? '.25' : '1';
+			};
+
+			var color = self.seg(_('%s: color').format(indicatorLabel(id)),
+				[ [ 'white', _('White') ], [ 'yellow', _('Yellow') ] ], cur.color,
+				function(v) { st.color = v; sync(); });
+
+			act.addEventListener('change', function() { st.action = act.value; sync(); });
+			port.addEventListener('change', function() { st.port = port.value; });
+			sync();
+
+			return { id: id, initial: cur, st: st,
+				node: E('div', { 'class': 'axl-ind' }, [
+					E('span', {}, lamp),
+					E('span', { 'class': 'nm' }, [ E('b', {}, indicatorLabel(id)), E('small', {}, indicatorHint(id)) ]),
+					E('span', {}, color),
+					E('span', {}, act),
+					portCell
+				]) };
+		});
+
+		return this.card(_('Status LEDs'), _('The two indicators on the front panel. Each has a white and a yellow light.'), null, [
+			this.indRows.length
+				? E('div', { 'class': 'axl-inds' }, this.indRows.map(function(r) { return r.node; }))
+				: E('p', { 'class': 'axl-help' }, _('No status LEDs were found.'))
 		]);
 	},
 
-	parse: function() {
+	stageIndicators: function() {
 		var self = this;
+		var sset = function(sid, opt, val) {
+			if (val == null) {
+				if (uci.get('system', sid, opt) != null) uci.unset('system', sid, opt);
+			}
+			else if (uci.get('system', sid, opt) !== val) {
+				uci.set('system', sid, opt, val);
+			}
+		};
 
-		(this.rows || []).forEach(function(r) {
-			var trig = r.sel.value, dev = r.dev.value.trim() || 'wan';
-
-			if (trig == r.trigger && (trig != 'netdev' || dev == r.devval))
-				return;
-
-			/* Reuse the stock section (led_wan_port_link, ...) or one added
-			 * earlier; create ours only when no section drives this LED. */
-			var sec = self.findSection(r.name), sid;
-
+		/* one LED as a standard `config led` section; reuses an existing one */
+		var setLed = function(name, action, port) {
+			var sec = self.findLedSection(name), sid;
 			if (sec) {
 				sid = sec['.name'];
-			} else {
-				sid = 'ax9000_' + r.name.replace(/[^A-Za-z0-9]/g, '_');
+			}
+			else {
+				sid = 'ax9000_' + name.replace(/[^A-Za-z0-9]/g, '_');
 				if (uci.get('system', sid) == null)
 					uci.add('system', 'led', sid);
-				setChanged(sid, 'name', r.name);
-				setChanged(sid, 'sysfs', r.name);
+				sset(sid, 'name', name);
+				sset(sid, 'sysfs', name);
 			}
+			var single = action == 'netdev';
+			var trig = { on: 'default-on', heartbeat: 'heartbeat', blink: 'timer', netdev: 'netdev' }[action] || 'none';
+			sset(sid, 'trigger', trig);
+			sset(sid, 'default', trig == 'none' ? '0' : (trig == 'default-on' ? '1' : null));
+			sset(sid, 'delayon', trig == 'timer' ? '500' : null);
+			sset(sid, 'delayoff', trig == 'timer' ? '500' : null);
+			sset(sid, 'dev', single ? port : null);
+			sset(sid, 'mode', single ? 'link tx rx' : null);
+		};
 
-			setChanged(sid, 'trigger', trig);
-			if (trig == 'netdev') {
-				setChanged(sid, 'dev', dev);
-				if (!uci.get('system', sid, 'mode')) uci.set('system', sid, 'mode', 'link tx rx');
-			}
+		(this.indRows || []).forEach(function(r) {
+			var st = r.st, init = r.initial;
+			if (st.action.indexOf('other:') == 0)
+				return;
+			if (uci.get('ax9000', r.id) && st.color == init.color && st.action == init.action && st.port == init.port)
+				return;
 
-			ledsChanged = true;
-			r.trigger = trig;
-			r.devval = dev;
+			if (!uci.get('ax9000', r.id))
+				uci.add('ax9000', 'indicator', r.id);
+			[ [ 'color', st.color ], [ 'action', st.action ], [ 'port', st.port ] ].forEach(function(kv) {
+				if (uci.get('ax9000', r.id, kv[0]) !== kv[1])
+					uci.set('ax9000', r.id, kv[0], kv[1]);
+			});
+
+			var pair = INDICATORS[r.id];
+			setLed(pair[st.color], st.action, st.port);
+			setLed(pair[st.color == 'white' ? 'yellow' : 'white'], 'off', null);
 		});
-
-		return Promise.resolve();
-	}
-});
-
-function parseTriggers(raw) {
-	var active = null, list = String(raw || '').trim().split(/\s+/).filter(Boolean).map(function(t) {
-		var m = t.match(/^\[(.+)\]$/);
-		if (m) { active = m[1]; return m[1]; }
-		return t;
-	});
-	return { list: list, active: active };
-}
-
-return view.extend({
-	/* The led init script has no reload trigger, so restart it once the system config is applied. */
-	refreshStatus: function() {
-		var o = this.oStatus;
-		return L.resolveDefault(callStatus(), null).then(function(st) { if (o) o.update(st); });
 	},
 
-	/* Save the Map(s) one after another: every Map.save() ends in the shared
-	 * uci.save(), and two concurrent ones replay the same staged changes. */
-	handleSave: function(ev) {
-		var self = this, maps = Array.prototype.slice.call(
-			document.getElementById('maincontent').querySelectorAll('.cbi-map'));
+	/* ---------- events ---------- */
 
-		return maps.reduce(function(p, map) {
-			return p.then(function() { return dom.callClassMethod(map, 'save'); });
-		}, Promise.resolve()).then(function() { return self.refreshStatus(); });
+	buildEvents: function() {
+		var self = this;
+
+		var ifaces = (uci.sections('network', 'interface') || []).map(function(s) { return s['.name']; })
+			.filter(function(n) { return n != 'loopback'; });
+		if (ifaces.indexOf(this.wan) < 0)
+			ifaces.unshift(this.wan);
+		var wan = E('select', { 'class': 'cbi-input-select', 'id': 'axl-wan', 'style': 'width:auto',
+			'change': function() { self.wan = wan.value; } },
+			ifaces.map(function(n) { return E('option', { 'value': n }, n); }));
+		wan.value = this.wan;
+
+		var speeds = [ [ 0.5, _('Slow') ], [ 1, _('Normal') ], [ 2, _('Fast') ] ];
+
+		var rows = this.events.map(function(ev) {
+			var info = eventInfo(ev.name);
+			var cbtn = E('button', { 'class': 'axl-cbtn', 'type': 'button', 'style': 'background:' + ev.color,
+				'title': ev.color, 'aria-label': _('%s: color %s').format(info[0], ev.color),
+				'click': function(e) { e.preventDefault(); self.pickEventColor(ev, cbtn, info[0]); } });
+
+			var eff = E('select', { 'class': 'cbi-input-select', 'aria-label': _('%s: effect').format(info[0]),
+				'change': function() { ev.effect = eff.value; sync(); } },
+				effects().map(function(e) { return E('option', { 'value': e[0] }, e[1]); }));
+			eff.value = ev.effect;
+
+			var opts = speeds.slice();
+			if (!speeds.some(function(s) { return s[0] == ev.speed; }))
+				opts.push([ ev.speed, ev.speed + '×' ]);
+			var spd = E('select', { 'class': 'cbi-input-select', 'aria-label': _('%s: speed').format(info[0]),
+				'change': function() { ev.speed = parseFloat(spd.value); } },
+				opts.map(function(s) { return E('option', { 'value': String(s[0]) }, s[1]); }));
+			spd.value = String(ev.speed);
+
+			var prio = E('input', { 'class': 'cbi-input-text', 'type': 'number', 'min': '0', 'max': '999', 'step': '1',
+				'value': String(ev.priority), 'aria-label': _('%s: priority').format(info[0]),
+				'input': function() { ev.priority = prio.value; } });
+
+			var night = E('input', { 'type': 'checkbox', 'change': function() { ev.override_night = night.checked; } });
+			night.checked = ev.override_night;
+
+			var sync = function() {
+				cbtn.disabled = !usesColor(ev.effect);
+				spd.disabled = !usesSpeed(ev.effect);
+			};
+			sync();
+
+			return E('div', { 'class': 'axl-evt' }, [
+				E('span', { 'class': 'sw' }, self.switchEl('axl-ev-' + ev.name, ev.enabled, null, function(on) { ev.enabled = on; })),
+				E('span', { 'class': 'nm' }, [
+					E('b', {}, info[0]),
+					info[1] ? E('small', {}, info[1]) : '',
+					E('label', {}, [ night, _('Show at night') ])
+				]),
+				E('span', { 'class': 'ef' }, eff),
+				E('span', { 'class': 'co' }, cbtn),
+				E('span', { 'class': 'sp' }, spd),
+				E('span', { 'class': 'pr' }, prio)
+			]);
+		});
+
+		return this.card(_('Events'), _('While an event is active it replaces the X light. The highest priority wins.'),
+			E('div', { 'class': 'axl-row' }, [ E('label', { 'for': 'axl-wan' }, _('Watch interface')), wan ]), [
+				E('div', { 'class': 'axl-evts' }, [
+					E('div', { 'class': 'axl-evt head' }, [
+						E('span', {}, _('On')), E('span', {}, _('Event')), E('span', {}, _('Effect')),
+						E('span', {}, _('Color')), E('span', {}, _('Speed')), E('span', {}, _('Priority'))
+					])
+				].concat(rows)),
+				E('p', { 'class': 'axl-help' }, _('"Watch interface" is the network interface checked for the "No internet" event.'))
+			]);
+	},
+
+	pickEventColor: function(ev, btn, label) {
+		var picked = ev.color;
+		var picker = colorPicker(ev.color, function(c) { picked = c; });
+
+		ui.showModal(_('%s: color').format(label), [
+			picker,
+			E('div', { 'class': 'right' }, [
+				E('button', { 'class': 'btn', 'click': ui.hideModal }, _('Cancel')), ' ',
+				E('button', { 'class': 'btn cbi-button-action important', 'click': function() {
+					ev.color = picked;
+					btn.style.background = picked;
+					btn.title = picked;
+					btn.setAttribute('aria-label', _('%s: color %s').format(label, picked));
+					ui.hideModal();
+				} }, _('Use this color'))
+			])
+		]);
+	},
+
+	/* ---------- save ---------- */
+
+	stage: function() {
+		var self = this, x = this.x, n = this.nightCfg;
+
+		if (n.enabled && (!TIME_RE.test(this.refs.nightStart.value) || !TIME_RE.test(this.refs.nightEnd.value)))
+			throw new Error(_('Enter the night start and end as HH:MM.'));
+		this.events.forEach(function(ev) {
+			var p = String(ev.priority).trim();
+			if (!/^[0-9]+$/.test(p) || +p > 999)
+				throw new Error(_('%s: priority must be a whole number from 0 to 999.').format(eventInfo(ev.name)[0]));
+		});
+
+		var set = function(sid, opt, val) {
+			if (uci.get('ax9000', sid, opt) !== val)
+				uci.set('ax9000', sid, opt, val);
+		};
+
+		if (!uci.get('ax9000', 'led'))
+			uci.add('ax9000', 'led', 'led');
+		set('led', 'effect', x.effect);
+		set('led', 'color', x.color);
+		set('led', 'speed', String(x.speed));
+		set('led', 'brightness', String(x.brightness));
+		set('led', 'night_enabled', n.enabled ? '1' : '0');
+		if (TIME_RE.test(n.start)) set('led', 'night_start', padTime(n.start));
+		if (TIME_RE.test(n.end)) set('led', 'night_end', padTime(n.end));
+		set('led', 'night_mode', n.mode);
+		set('led', 'wan_iface', this.wan);
+
+		this.events.forEach(function(ev) {
+			set(ev.name, 'enabled', ev.enabled ? '1' : '0');
+			set(ev.name, 'priority', String(+String(ev.priority).trim()));
+			set(ev.name, 'effect', ev.effect);
+			set(ev.name, 'color', ev.color);
+			set(ev.name, 'speed', String(ev.speed));
+			set(ev.name, 'override_night', ev.override_night ? '1' : '0');
+		});
+
+		this.stageIndicators();
+
+		if (usesColor(x.effect))
+			pushRecent(x.color);
+	},
+
+	handleSave: function(ev) {
+		try {
+			this.stage();
+		}
+		catch (e) {
+			ui.addNotification(null, E('p', {}, e.message), 'danger');
+			return Promise.reject(e);
+		}
+		return uci.save();
 	},
 
 	handleSaveApply: function(ev, mode) {
-		var self = this;
 		return this.handleSave(ev).then(function() {
-			return Promise.resolve(ui.changes.apply(mode == '0'));
-		}).then(function() {
-			if (!ledsChanged) return;
-			ledsChanged = false;
-			return new Promise(function(r) { setTimeout(r, 1500); }).then(function() {
-				return fs.exec('/etc/init.d/led', [ 'restart' ]);
-			});
-		}).then(function() { return new Promise(function(r) { setTimeout(r, 1500); }); })
-		.then(function() { return self.refreshStatus(); });
+			ui.changes.apply(mode == '0');
+		}).catch(function() {});
 	},
 
-	load: function() {
+	handleReset: function(ev) {
+		var self = this;
+		[ 'ax9000', 'system', 'network' ].forEach(function(c) { uci.unload(c); });
 		return Promise.all([
-			L.resolveDefault(fs.list('/sys/class/leds'), []),
-			L.resolveDefault(callStatus(), null)
+			uci.load('ax9000'), uci.load('system'), L.resolveDefault(uci.load('network'), null),
+			L.resolveDefault(callLeds(), {})
 		]).then(function(r) {
-			var names = r[0].map(function(e) { return e.name; })
-				.filter(function(n) { return n != SKIP_LED; }).sort();
-
-			return Promise.all(names.map(function(n) {
-				return L.resolveDefault(fs.read('/sys/class/leds/' + n + '/trigger'), '').then(function(raw) {
-					var t = parseTriggers(raw);
-					return t.list.length ? { name: n, triggers: t.list, active: t.active } : null;
-				});
-			})).then(function(leds) {
-				return { leds: leds.filter(Boolean), status: r[1] };
-			});
-		});
-	},
-
-	render: function(data) {
-		var m, s, o, oEffect, oColor, oSpeed, oBright, oStatus, oPrev;
-
-		m = new form.Map('ax9000', _('LED'),
-			_('Control the X light on top of the router and the other status LEDs.'));
-		/* Other LEDs are `config led` sections of /etc/config/system: load it
-		 * in this Map too, so a single Map (one uci.save()) covers the page. */
-		m.parsechain = [ 'ax9000', 'system' ];
-
-		/* ---- X light ---- */
-		s = m.section(form.NamedSection, 'led', 'led', _('X light'));
-
-		/* virtual X to the left of the controls (re-created on every render) */
-		s.render = function() {
-			return Promise.resolve(form.NamedSection.prototype.render.apply(this, arguments)).then(function(node) {
-				var body = node && node.querySelector('.cbi-section-node');
-				if (!body) return node;
-				var split = E('div', { 'class': 'axl-split' });
-				body.parentNode.insertBefore(split, body);
-				split.appendChild(virtualX(function() {
-					return {
-						effect: oEffect.formvalue('led'), color: oColor.formvalue('led'),
-						speed: oSpeed.formvalue('led'), brightness: oBright.formvalue('led')
-					};
-				}));
-				split.appendChild(body);
-				return node;
-			});
-		};
-
-		oStatus = s.option(StatusValue, '_status', _('Current state'));
-		oStatus.initial = data.status;
-		this.oStatus = oStatus;
-
-		oEffect = s.option(form.ListValue, 'effect', _('Effect'));
-		effects().forEach(function(e) { oEffect.value(e[0], e[1]); });
-		oEffect.default = 'static';
-
-		oColor = s.option(ColorValue, 'color', _('Color'));
-		oColor.default = '#0000ff';
-		oColor.rmempty = false;
-		oColor.retain = true;
-		[ 'static', 'breathing', 'flashing', 'cycle' ].forEach(function(e) { oColor.depends('effect', e); });
-
-		oSpeed = s.option(SliderValue, 'speed', _('Speed'),
-			_('Effect speed from 0.1 (slow) to 10 (fast).'));
-		oSpeed.min = SPEED_MIN; oSpeed.max = SPEED_MAX; oSpeed.log = true; oSpeed.unit = '×';
-		oSpeed.datatype = 'range(0.1,10)';
-		oSpeed.default = '1';
-		oSpeed.rmempty = false;
-		oSpeed.retain = true;
-		[ 'breathing', 'flashing', 'cycle', 'rainbow' ].forEach(function(e) { oSpeed.depends('effect', e); });
-
-		oBright = s.option(SliderValue, 'brightness', _('Brightness'),
-			_('0 turns the light off, 255 is full brightness.'));
-		oBright.min = 0; oBright.max = 255;
-		oBright.datatype = 'and(uinteger,range(0,255))';
-		oBright.default = '255';
-		oBright.rmempty = false;
-
-		oPrev = s.option(PreviewValue, '_preview', _('Preview'),
-			_('Shows the current, unsaved settings on the light for %d seconds, then the saved setup returns.').format(PREVIEW_SECONDS));
-		oPrev.collect = function() {
-			var color = oColor.formvalue('led'), speed = parseFloat(oSpeed.formvalue('led')),
-			    bright = parseInt(oBright.formvalue('led'), 10), effect = oEffect.formvalue('led');
-
-			if (!HEX_RE.test(color || '')) {
-				ui.addNotification(null, E('p', {}, _('Enter a color as #rrggbb, for example #0000ff.')), 'danger');
-				return null;
-			}
-			if (!(speed >= SPEED_MIN && speed <= SPEED_MAX)) speed = 1;
-			if (!(bright >= 0 && bright <= 255)) bright = 255;
-			return { effect: effect, color: color.toLowerCase(), speed: speed, brightness: bright };
-		};
-		oPrev.running = function() { return oStatus.initial; };
-
-		/* ---- Night mode ---- */
-		s = m.section(form.NamedSection, 'led', 'led', _('Night mode'),
-			_('Dim or switch off the X light during the night. Events marked "Override night" still show.'));
-
-		o = s.option(StoredFlag, 'night_enabled', _('Enable'));
-		o.default = '0';
-		o.rmempty = false;
-
-		[ [ 'night_start', _('Start'), '23:00' ], [ 'night_end', _('End'), '07:00' ] ].forEach(function(d) {
-			o = s.option(form.Value, d[0], d[1]);
-			o.default = d[2];
-			o.datatype = 'timehhmm';
-			o.rmempty = false;
-			o.retain = true;
-			o.depends('night_enabled', '1');
-			o.renderWidget = function() {
-				return Promise.resolve(form.Value.prototype.renderWidget.apply(this, arguments)).then(function(node) {
-					var i = node.querySelector('input');
-					if (i) i.type = 'time';
-					return node;
-				});
-			};
-		});
-
-		o = s.option(form.ListValue, 'night_mode', _('At night'));
-		o.value('off', _('Light off'));
-		o.value('dim', _('Dimmed'));
-		o.default = 'off';
-		o.retain = true;
-		o.depends('night_enabled', '1');
-
-		/* ---- Events ---- */
-		s = m.section(form.NamedSection, 'led', 'led', _('Events'),
-			_('Events temporarily replace the X light. When several are active, the highest priority wins.'));
-
-		o = s.option(form.Value, 'wan_iface', _('WAN interface'),
-			_('Network interface watched for the "No internet" event.'));
-		o.default = 'wan';
-		o.datatype = 'uciname';
-		o.rmempty = false;
-
-		s = m.section(form.TableSection, 'led_event');
-		s.anonymous = true;
-		s.addremove = false;
-		s.sortable = false;
-
-		o = s.option(form.DummyValue, '_name', _('Event'));
-		o.cfgvalue = function(section_id) { return eventLabel(section_id); };
-
-		o = s.option(StoredFlag, 'enabled', _('Enabled'));
-		o.default = '1';
-		o.editable = true;
-
-		o = s.option(form.Value, 'priority', _('Priority'));
-		o.datatype = 'and(uinteger,range(0,999))';
-		o.default = '50';
-		o.rmempty = false;
-
-		o = s.option(form.ListValue, 'effect', _('Effect'));
-		effects().forEach(function(e) { o.value(e[0], e[1]); });
-		o.default = 'static';
-
-		o = s.option(ColorValue, 'color', _('Color'));
-		o.compact = true;
-		o.default = '#ff0000';
-		o.rmempty = false;
-
-		o = s.option(form.Value, 'speed', _('Speed'));
-		o.datatype = 'range(0.1,10)';
-		o.default = '1';
-		o.rmempty = false;
-
-		o = s.option(StoredFlag, 'override_night', _('Override night'));
-		o.default = '0';
-		o.editable = true;
-
-		/* ---- Other LEDs (system config, same Map: see OtherLeds) ---- */
-		var other = m.section(OtherLeds);
-		other.leds = data.leds;
-
-		poll.add(function() {
-			return callStatus().then(function(st) { oStatus.update(st); }).catch(function() {});
-		}, 3);
-		if (!poll.active()) poll.start();
-
-		return m.render().then(function(node) {
-			return E('div', {}, [ E('style', {}, CSS), node ]);
+			self.leds = r[3] || {};
+			self.readConfig();
+			self.build();
 		});
 	}
 });
