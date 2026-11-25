@@ -1,8 +1,9 @@
 # Installing the AX9000 build
 
 Build the image first ([build.md](build.md)). The image is a sysupgrade-compatible OpenWrt 25.12.6 image
-for the Xiaomi AX9000 (same layout and `board_name` as stock OpenWrt 25.12). **None of
-it has been tested on a router yet**; follow the cautious path below.
+for the Xiaomi AX9000 (same layout and `board_name` as stock OpenWrt 25.12). It runs on
+the author's two AX9000 routers, but it is a community build, not an official OpenWrt
+image: follow the cautious path below the first time you flash it.
 
 ## Risks to know about
 
