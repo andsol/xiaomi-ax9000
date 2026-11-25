@@ -1,6 +1,6 @@
 // Pure decision logic of ax9000-fand: UCI -> config, and one control step.
 // No sysfs/ubus/uci access, so it is unit tested on the host.
-import { BUILTIN, validate, duty_for, apply_hysteresis, safety, active_mode } from './fancurve.uc';
+import { DEFAULTS, validate, duty_for, apply_hysteresis, safety, in_window } from './fancurve.uc';
 
 export const DEFAULT_SENSORS = [
 	'cpu0-thermal', 'cpu1-thermal', 'cpu2-thermal', 'cpu3-thermal',
@@ -9,17 +9,12 @@ export const DEFAULT_SENSORS = [
 	'ath11k_hwmon', 'ath10k_hwmon'
 ];
 
-const MODES = ['silent', 'balanced', 'aggressive', 'custom', 'manual'];
+export const PROFILES = ['day', 'night'];
 const TEMP_MIN = -40;
 const TEMP_MAX = 150;
 
 function clone(v) {
 	return json(sprintf('%J', v));
-}
-
-function is_num(v) {
-	let t = type(v);
-	return t == 'int' || t == 'double';
 }
 
 function to_num(v) {
@@ -39,72 +34,65 @@ function as_list(v) {
 	return type(v) == 'array' ? v : (v == null ? [] : [v]);
 }
 
-// "T:DUTY" (DUTY may be "min") -> [T, DUTY]; malformed -> [null, null], which
-// validate() reports as invalid.
+// "T:DUTY" -> [T, DUTY]; malformed -> [null, null], which validate() reports.
 function parse_point(s) {
-	let m = type(s) == 'string' ? match(s, /^[ ]*(-?[0-9]+):(min|[0-9]+)[ ]*$/) : null;
+	let m = type(s) == 'string' ? match(s, /^[ ]*(-?[0-9]+):([0-9]+)[ ]*$/) : null;
 	if (!m)
 		return [null, null];
-	return [int(m[1]), m[2] == 'min' ? 'min' : int(m[2])];
+	return [int(m[1]), int(m[2])];
 }
 
-// Formats profile points as UCI list values ("50:min", "60:40").
+// Formats profile points as UCI list values ("60:25", "68:40").
 export function format_points(points) {
 	return map(points, p => sprintf('%s:%s', p[0], p[1]));
 };
 
 // `all` is the result of uci.get_all('ax9000'): sections keyed by name with
-// ".type"/".index" meta fields and list options as arrays. Returns the
-// effective configuration; UCI profiles override a deep copy of BUILTIN.
+// ".type" meta fields and list options as arrays. Returns the effective
+// configuration; UCI values override a deep copy of DEFAULTS.
 export function parse_uci(all) {
 	all ??= {};
 	let fan = all.fan ?? {};
 	let cfg = {
-		mode: fan.mode ?? 'balanced',
-		manual_duty: to_int(fan.manual_duty, 50, 0, 100),
 		interval: to_int(fan.interval, 5, 1, 60),
 		sensors: length(as_list(fan.sensor)) ? as_list(fan.sensor) : [...DEFAULT_SENSORS],
-		schedule_enabled: fan.schedule_enabled == '1',
-		schedule: [],
-		profiles: clone(BUILTIN)
+		night_enabled: fan.night_enabled == '1',
+		night_start: fan.night_start ?? '23:00',
+		night_end: fan.night_end ?? '07:00',
+		profiles: clone(DEFAULTS)
 	};
-	cfg.profiles.custom = clone(BUILTIN.balanced);
 
-	for (let name, sec in all) {
-		if (sec['.type'] != 'fan_profile')
+	for (let name in PROFILES) {
+		let sec = all[name];
+		if (type(sec) != 'object' || sec['.type'] != 'fan_profile')
 			continue;
-		let p = cfg.profiles[name] ??= clone(BUILTIN.balanced);
+		let p = cfg.profiles[name];
+		if (sec.mode != null)
+			p.mode = sec.mode;
+		if (sec.fixed_duty != null)
+			p.fixed = to_num(sec.fixed_duty);
+		if (sec.hysteresis != null)
+			p.hysteresis = to_num(sec.hysteresis);
 		let pts = as_list(sec.point);
 		if (length(pts))
 			p.points = map(pts, parse_point);
-		if (sec.min_duty != null)
-			p.min_duty = to_num(sec.min_duty);
-		if (sec.hysteresis != null)
-			p.hysteresis = to_num(sec.hysteresis);
 	}
-
-	let wins = [];
-	for (let name, sec in all)
-		if (sec['.type'] == 'fan_schedule')
-			push(wins, sec);
-	wins = sort(wins, (a, b) => (a['.index'] ?? 0) - (b['.index'] ?? 0));
-	cfg.schedule = map(wins, w => ({ start: w.start, end: w.end, mode: w.mode }));
 
 	return cfg;
 };
 
-// Keeps only windows with a known mode; start/end validity is checked by
-// active_mode() itself.
-export function usable_schedule(schedule) {
-	return filter(type(schedule) == 'array' ? schedule : [], w => type(w) == 'object' && w.mode in MODES);
+// The setting in force at `now_minutes` (minutes since local midnight).
+export function active_profile(cfg, now_minutes) {
+	return cfg.night_enabled && in_window(cfg.night_start, cfg.night_end, now_minutes) ? 'night' : 'day';
 };
 
 // One control step.
 //   state     { mode, duty, temp } carried between ticks (hysteresis), or null
 //   readings  [{ id, label, temp }]; temp null/garbage = failed sensor, skipped
 //   cfg       result of parse_uci()
-// Returns { duty, mode, temp, error, state }; error is null, "sensor_error" or
-// "profile_invalid". Every failure path ends at a safe duty.
+// Returns { duty, mode, temp, error, state }; mode is 'day' or 'night'; error
+// is null, "sensor_error" or "profile_invalid". Every failure path ends at a
+// safe duty.
 export function decide(state, readings, cfg, now_minutes) {
 	state ??= {};
 
@@ -117,18 +105,12 @@ export function decide(state, readings, cfg, now_minutes) {
 			temp = t;
 	}
 
-	let mode = cfg.schedule_enabled
-		? active_mode(usable_schedule(cfg.schedule), now_minutes, cfg.mode)
-		: cfg.mode;
-
+	let mode = active_profile(cfg, now_minutes);
 	let error = null;
-	let profile = null;
-	if (mode != 'manual') {
-		profile = cfg.profiles?.[mode];
-		if (!(mode in MODES) || profile == null || validate(profile) != null) {
-			profile = BUILTIN.balanced;
-			error = 'profile_invalid';
-		}
+	let profile = cfg.profiles?.[mode];
+	if (profile == null || validate(profile) != null) {
+		profile = DEFAULTS[mode];
+		error = 'profile_invalid';
 	}
 
 	// No usable sensor at all: run flat out.
@@ -136,14 +118,14 @@ export function decide(state, readings, cfg, now_minutes) {
 		return { duty: 100, mode, temp: null, error: 'sensor_error', state: { mode, duty: null, temp: null } };
 
 	let duty, next;
-	if (mode == 'manual') {
-		duty = to_int(cfg.manual_duty, 50, 0, 100);
+	if (profile.mode == 'fixed') {
+		duty = duty_for(profile, temp);
 		next = { mode, duty: null, temp: null };
 	}
 	else {
 		let prev = state.mode == mode ? state : {};
 		let raw = duty_for(profile, temp);
-		let hy = is_num(profile.hysteresis) ? profile.hysteresis : 3;
+		let hy = profile.hysteresis ?? 3;
 		duty = apply_hysteresis(prev.duty, prev.temp, raw, temp, hy);
 		// The reference temperature only stays put while hysteresis holds the duty.
 		next = { mode, duty, temp: duty != raw ? prev.temp : temp };
@@ -166,16 +148,15 @@ export function pwm_step(duty) {
 	return { pct: st * 10, pwm: int(st * 255 / 10.0 + 0.5) };
 };
 
-// UCI values for restoring a profile to its defaults, or null for an unknown
-// name. "custom" resets to a copy of balanced.
+// UCI values that restore a setting ('day' or 'night') to its defaults, or
+// null for an unknown name.
 export function reset_values(name) {
-	if (type(name) != 'string')
+	if (type(name) != 'string' || !(name in PROFILES))
 		return null;
-	let p = name == 'custom' ? BUILTIN.balanced : BUILTIN[name];
-	if (type(p) != 'object')
-		return null;
+	let p = DEFAULTS[name];
 	return {
-		min_duty: '' + p.min_duty,
+		mode: p.mode,
+		fixed_duty: '' + p.fixed,
 		hysteresis: '' + p.hysteresis,
 		point: format_points(p.points)
 	};

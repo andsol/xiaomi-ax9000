@@ -20,11 +20,24 @@ hacks, and adds a LuCI app for the new controls.
   restricted to the AX9000's real frequency range), and LuCI offers only the channels
   the hardware supports (36-64 on that radio). Background: [docs/radio.md](docs/radio.md).
 - **Fan:** EMC2301 driver with a kernel-level thermal failsafe, plus the `ax9000-fand`
-  service with *Silent / Balanced / Aggressive / Custom / Manual* modes.
+  service with a *Day* and a *Night* setting: each a 4-point curve you drag in LuCI (the
+  fan stops below the first point) or a fixed speed.
 - **LEDs:** the X light as one RGB LED on hardware PWM: any colour, smooth brightness,
-  effects. Details: [docs/dev/leds.md](docs/dev/leds.md).
+  effects, night mode and event signals; the front status LEDs can be set too. Details: [docs/dev/leds.md](docs/dev/leds.md).
 - **LuCI:** *System → AX9000 Controls*, with *Fan* and *LED* pages (English, Russian).
 - Everything else is plain OpenWrt 25.12 for the AX9000, with `luci-ssl` included.
+
+## Screenshots
+
+**Fan:** a day and a night setting, each a 4-point curve or a fixed speed, with live
+temperature, speed and RPM.
+
+![Fan page in LuCI](docs/fan-management.png)
+
+**LED:** effect, colour and brightness of the X light with a live preview, night mode,
+the front status indicators and event signals.
+
+![LED page in LuCI](docs/led-management.png)
 
 ## Quick start
 
@@ -43,6 +56,9 @@ The images appear in `out/`. Before flashing, read:
   OS, options, adding your own packages, verifying the image, troubleshooting.
 - **[docs/install.md](docs/install.md):** flashing: pre-flight checklist, safe
   initramfs test boot, rollback and UART recovery.
+- **[Upgrading to a newer build](docs/install.md#upgrading-to-a-newer-build):** your
+  settings are kept, but packages you installed later with `apk add` are not and must be
+  installed again.
 
 ## Status
 
@@ -72,6 +88,7 @@ a way to recover (see [docs/install.md](docs/install.md)).
 | `tools/bdf/`, `tools/radio/` | Board data file generator/extractor, on-router BDF swap helper |
 | `tests/` | Tests for the services, LuCI helpers and the BDF tools |
 | `docs/` | Build, install, radio and developer notes |
+| `AGENTS.md` | Working notes for contributors and coding agents (tests, deploying to a router, pitfalls) |
 
 ## Licensing and redistribution
 

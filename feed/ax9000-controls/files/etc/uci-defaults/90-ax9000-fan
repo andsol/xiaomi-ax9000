@@ -1,14 +1,32 @@
 #!/bin/sh
-# Creates the fan configuration in /etc/config/ax9000 unless it already exists.
+# Fan configuration in /etc/config/ax9000: a 'day' and a 'night' setting
+# (each a 4-point curve or a fixed speed) plus the night hours.
+#
+# Creates it on a fresh install and converts the old schema once (fan.mode with
+# silent/balanced/aggressive/custom/manual and fan_schedule windows). An old
+# "manual" mode becomes a fixed day speed; the old curves and windows are
+# dropped because the new curve stops the fan below its first point.
+# Existing new-style settings are never touched.
 
-uci -q get ax9000.fan >/dev/null && exit 0
+profile() {
+	# name mode fixed_duty p1 p2 p3 p4
+	uci -q get "ax9000.$1" >/dev/null && return
+	uci -q batch <<EOF
+set ax9000.$1=fan_profile
+set ax9000.$1.mode='$2'
+set ax9000.$1.fixed_duty='$3'
+set ax9000.$1.hysteresis='3'
+add_list ax9000.$1.point='$4'
+add_list ax9000.$1.point='$5'
+add_list ax9000.$1.point='$6'
+add_list ax9000.$1.point='$7'
+EOF
+}
 
-uci -q batch <<'EOF'
+if ! uci -q get ax9000.fan >/dev/null; then
+	uci -q batch <<'EOF'
 set ax9000.fan=fan
-set ax9000.fan.mode='balanced'
-set ax9000.fan.manual_duty='50'
 set ax9000.fan.interval='5'
-set ax9000.fan.schedule_enabled='0'
 add_list ax9000.fan.sensor='cpu0-thermal'
 add_list ax9000.fan.sensor='cpu1-thermal'
 add_list ax9000.fan.sensor='cpu2-thermal'
@@ -22,39 +40,30 @@ add_list ax9000.fan.sensor='wcss-phyb0-thermal'
 add_list ax9000.fan.sensor='wcss-phyb1-thermal'
 add_list ax9000.fan.sensor='ath11k_hwmon'
 add_list ax9000.fan.sensor='ath10k_hwmon'
-
-set ax9000.silent=fan_profile
-set ax9000.silent.min_duty='20'
-set ax9000.silent.hysteresis='3'
-add_list ax9000.silent.point='60:min'
-add_list ax9000.silent.point='70:35'
-add_list ax9000.silent.point='80:60'
-add_list ax9000.silent.point='85:100'
-
-set ax9000.balanced=fan_profile
-set ax9000.balanced.min_duty='20'
-set ax9000.balanced.hysteresis='3'
-add_list ax9000.balanced.point='50:min'
-add_list ax9000.balanced.point='60:40'
-add_list ax9000.balanced.point='70:65'
-add_list ax9000.balanced.point='78:100'
-
-set ax9000.aggressive=fan_profile
-set ax9000.aggressive.min_duty='20'
-set ax9000.aggressive.hysteresis='3'
-add_list ax9000.aggressive.point='45:40'
-add_list ax9000.aggressive.point='55:60'
-add_list ax9000.aggressive.point='65:85'
-add_list ax9000.aggressive.point='72:100'
-
-set ax9000.custom=fan_profile
-set ax9000.custom.min_duty='20'
-set ax9000.custom.hysteresis='3'
-add_list ax9000.custom.point='50:min'
-add_list ax9000.custom.point='60:40'
-add_list ax9000.custom.point='70:65'
-add_list ax9000.custom.point='78:100'
 EOF
+fi
+
+old_mode="$(uci -q get ax9000.fan.mode)"
+if [ -n "$old_mode" ]; then
+	manual="$(uci -q get ax9000.fan.manual_duty)"
+	for s in silent balanced aggressive custom; do
+		uci -q delete "ax9000.$s"
+	done
+	while uci -q delete ax9000.@fan_schedule[0]; do :; done
+	uci -q delete ax9000.fan.mode
+	uci -q delete ax9000.fan.manual_duty
+	uci -q delete ax9000.fan.schedule_enabled
+	if [ "$old_mode" = manual ]; then
+		profile day fixed "${manual:-40}" 60:25 68:40 76:65 84:100
+	fi
+fi
+
+profile day curve 40 60:25 68:40 76:65 84:100
+profile night curve 20 65:20 72:30 80:55 86:100
+
+uci -q get ax9000.fan.night_enabled >/dev/null || uci -q set ax9000.fan.night_enabled='0'
+uci -q get ax9000.fan.night_start >/dev/null || uci -q set ax9000.fan.night_start='23:00'
+uci -q get ax9000.fan.night_end >/dev/null || uci -q set ax9000.fan.night_end='07:00'
 
 uci commit ax9000
 exit 0

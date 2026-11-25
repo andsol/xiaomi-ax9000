@@ -3,9 +3,9 @@
 
 // rpcd plugin: ubus object "ax9000.fan".
 //   status         state published by ax9000-fand (no IPC, reads the json file)
-//   profiles       effective profiles (UCI overriding the built-in defaults)
-//   reset_profile  { name } restores a built-in profile's UCI section; "custom"
-//                  becomes a copy of balanced; unknown names -> ubus invalid argument
+//   profiles       effective day/night settings (UCI overriding the defaults)
+//   reset_profile  { name } restores 'day' or 'night' to its defaults;
+//                  other names -> ubus invalid argument
 
 import { readfile } from 'fs';
 import { cursor } from 'uci';
@@ -46,8 +46,10 @@ const methods = {
 
 			return {
 				running: running,
-				mode: st.mode ?? cfg.mode,
-				active_mode: st.active_mode ?? null,
+				active: st.active ?? fanctl.active_profile(cfg, localtime().hour * 60 + localtime().min),
+				night_enabled: cfg.night_enabled,
+				night_start: cfg.night_start,
+				night_end: cfg.night_end,
 				temp: st.temp ?? null,
 				duty: st.duty ?? null,
 				duty_applied: st.duty_applied ?? null,
@@ -75,7 +77,8 @@ const methods = {
 			let uci = cursor();
 			uci.delete('ax9000', name);
 			uci.set('ax9000', name, 'fan_profile');
-			uci.set('ax9000', name, 'min_duty', v.min_duty);
+			uci.set('ax9000', name, 'mode', v.mode);
+			uci.set('ax9000', name, 'fixed_duty', v.fixed_duty);
 			uci.set('ax9000', name, 'hysteresis', v.hysteresis);
 			uci.set('ax9000', name, 'point', v.point);
 			uci.save('ax9000');

@@ -1,21 +1,24 @@
-// Pure fan-control logic: curves, hysteresis, safety floor and mode
-// schedules. No sysfs/ubus/uci access, so it can be unit tested on the host.
+// Pure fan-control logic: curves, hysteresis, safety floor and the night
+// window. No sysfs/ubus/uci access, so it can be unit tested on the host.
+//
+// A profile is { mode, fixed, hysteresis, points }:
+//   mode 'curve'  duty follows `points` ([[temp, duty], ...], temperatures
+//                 strictly increasing). Below the first point the fan is
+//                 stopped (0 %); above the last it stays at the last duty.
+//   mode 'fixed'  duty is `fixed` whatever the temperature.
 
-export const BUILTIN = {
-	silent: {
-		points: [[60, "min"], [70, 35], [80, 60], [85, 100]],
-		min_duty: 20,
-		hysteresis: 3
+export const DEFAULTS = {
+	day: {
+		mode: 'curve',
+		fixed: 40,
+		hysteresis: 3,
+		points: [[60, 25], [68, 40], [76, 65], [84, 100]]
 	},
-	balanced: {
-		points: [[50, "min"], [60, 40], [70, 65], [78, 100]],
-		min_duty: 20,
-		hysteresis: 3
-	},
-	aggressive: {
-		points: [[45, 40], [55, 60], [65, 85], [72, 100]],
-		min_duty: 20,
-		hysteresis: 3
+	night: {
+		mode: 'curve',
+		fixed: 20,
+		hysteresis: 3,
+		points: [[65, 20], [72, 30], [80, 55], [86, 100]]
 	}
 };
 
@@ -28,28 +31,37 @@ function is_num(v) {
 
 // Returns null when the profile is usable, otherwise an error string.
 export function validate(profile) {
-	if (type(profile) != 'object' || type(profile.points) != 'array' || length(profile.points) < 2)
-		return "at least 2 points required";
+	if (type(profile) != 'object')
+		return "profile must be an object";
 
-	let md = profile.min_duty;
-	if (md != null && (!is_num(md) || md < 0 || md > 100))
-		return "min_duty must be between 0 and 100";
+	if (profile.mode != 'curve' && profile.mode != 'fixed')
+		return "mode must be curve or fixed";
 
 	let hy = profile.hysteresis;
 	if (hy != null && (!is_num(hy) || hy < 0))
 		return "hysteresis must be a non-negative number";
 
-	for (let p in profile.points)
-		if (type(p) != 'array' || length(p) != 2 || !is_num(p[0]) ||
-		    !(is_num(p[1]) || p[1] == "min"))
+	if (profile.mode == 'fixed') {
+		let f = profile.fixed;
+		if (!is_num(f) || f < 0 || f > 100)
+			return "fixed speed must be between 0 and 100";
+		return null;
+	}
+
+	let pts = profile.points;
+	if (type(pts) != 'array' || length(pts) < 2)
+		return "at least 2 points required";
+
+	for (let p in pts)
+		if (type(p) != 'array' || length(p) != 2 || !is_num(p[0]) || !is_num(p[1]))
 			return "points must be numeric";
 
-	for (let i = 1; i < length(profile.points); i++)
-		if (profile.points[i][0] <= profile.points[i - 1][0])
+	for (let i = 1; i < length(pts); i++)
+		if (pts[i][0] <= pts[i - 1][0])
 			return "points must be sorted by temperature";
 
-	for (let p in profile.points)
-		if (p[1] != "min" && (p[1] < 0 || p[1] > 100))
+	for (let p in pts)
+		if (p[1] < 0 || p[1] > 100)
 			return "duty must be between 0 and 100";
 
 	return null;
@@ -57,14 +69,16 @@ export function validate(profile) {
 
 // Duty (int percent) for a temperature; assumes a validated profile.
 export function duty_for(profile, temp) {
-	let min_duty = is_num(profile.min_duty) ? profile.min_duty : 20;
-	let pts = map(profile.points, p => [p[0], p[1] == "min" ? min_duty : p[1]]);
+	if (profile.mode == 'fixed')
+		return int(profile.fixed + 0.5);
+
+	let pts = profile.points;
 	let n = length(pts);
 	let d;
 
-	if (temp <= pts[0][0])
-		d = pts[0][1];
-	else if (temp >= pts[n - 1][0])
+	if (temp < pts[0][0])
+		return 0;
+	if (temp >= pts[n - 1][0])
 		d = pts[n - 1][1];
 	else {
 		for (let i = 1; i < n; i++) {
@@ -78,15 +92,12 @@ export function duty_for(profile, temp) {
 	}
 
 	d = int(d + 0.5); // round half up (duties are non-negative)
-	if (d < min_duty)
-		d = int(min_duty);
-	if (d > 100)
-		d = 100;
-	return d;
+	return d > 100 ? 100 : d;
 };
 
 // Hold the previous duty only on the way down, until the temperature has
-// dropped by at least `hyst` degrees from where that duty was set.
+// dropped by at least `hyst` degrees from where that duty was set. This also
+// keeps the fan running a little below the first point instead of toggling.
 export function apply_hysteresis(prev_duty, prev_temp, new_duty, temp, hyst) {
 	if (prev_duty == null || prev_temp == null)
 		return new_duty;
@@ -109,18 +120,13 @@ function parse_hhmm(s) {
 	return h * 60 + mi;
 }
 
-// First matching window wins. Windows may cross midnight; start == end never
-// matches. Start is inclusive, end exclusive. Malformed windows are skipped.
-export function active_mode(schedule, now_minutes, default_mode) {
-	for (let w in (type(schedule) == 'array' ? schedule : [])) {
-		let s = parse_hhmm(w?.start), e = parse_hhmm(w?.end);
-		if (s == null || e == null || s == e)
-			continue;
-		let hit = s < e
-			? (now_minutes >= s && now_minutes < e)
-			: (now_minutes >= s || now_minutes < e);
-		if (hit)
-			return w.mode;
-	}
-	return default_mode;
+// True when `now_minutes` (since local midnight) lies in [start, end). The
+// window may cross midnight; start == end or malformed times never match.
+export function in_window(start, end, now_minutes) {
+	let s = parse_hhmm(start), e = parse_hhmm(end);
+	if (s == null || e == null || s == e)
+		return false;
+	return s < e
+		? (now_minutes >= s && now_minutes < e)
+		: (now_minutes >= s || now_minutes < e);
 };
