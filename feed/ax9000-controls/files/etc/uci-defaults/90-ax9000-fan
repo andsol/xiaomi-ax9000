@@ -1,0 +1,60 @@
+#!/bin/sh
+# Creates the fan configuration in /etc/config/ax9000 unless it already exists.
+
+uci -q get ax9000.fan >/dev/null && exit 0
+
+uci -q batch <<'EOF'
+set ax9000.fan=fan
+set ax9000.fan.mode='balanced'
+set ax9000.fan.manual_duty='50'
+set ax9000.fan.interval='5'
+set ax9000.fan.schedule_enabled='0'
+add_list ax9000.fan.sensor='cpu0-thermal'
+add_list ax9000.fan.sensor='cpu1-thermal'
+add_list ax9000.fan.sensor='cpu2-thermal'
+add_list ax9000.fan.sensor='cpu3-thermal'
+add_list ax9000.fan.sensor='nss-top-thermal'
+add_list ax9000.fan.sensor='nss0-thermal'
+add_list ax9000.fan.sensor='nss1-thermal'
+add_list ax9000.fan.sensor='wcss-phya0-thermal'
+add_list ax9000.fan.sensor='wcss-phya1-thermal'
+add_list ax9000.fan.sensor='wcss-phyb0-thermal'
+add_list ax9000.fan.sensor='wcss-phyb1-thermal'
+add_list ax9000.fan.sensor='ath11k_hwmon'
+add_list ax9000.fan.sensor='ath10k_hwmon'
+
+set ax9000.silent=fan_profile
+set ax9000.silent.min_duty='20'
+set ax9000.silent.hysteresis='3'
+add_list ax9000.silent.point='60:min'
+add_list ax9000.silent.point='70:35'
+add_list ax9000.silent.point='80:60'
+add_list ax9000.silent.point='85:100'
+
+set ax9000.balanced=fan_profile
+set ax9000.balanced.min_duty='20'
+set ax9000.balanced.hysteresis='3'
+add_list ax9000.balanced.point='50:min'
+add_list ax9000.balanced.point='60:40'
+add_list ax9000.balanced.point='70:65'
+add_list ax9000.balanced.point='78:100'
+
+set ax9000.aggressive=fan_profile
+set ax9000.aggressive.min_duty='20'
+set ax9000.aggressive.hysteresis='3'
+add_list ax9000.aggressive.point='45:40'
+add_list ax9000.aggressive.point='55:60'
+add_list ax9000.aggressive.point='65:85'
+add_list ax9000.aggressive.point='72:100'
+
+set ax9000.custom=fan_profile
+set ax9000.custom.min_duty='20'
+set ax9000.custom.hysteresis='3'
+add_list ax9000.custom.point='50:min'
+add_list ax9000.custom.point='60:40'
+add_list ax9000.custom.point='70:65'
+add_list ax9000.custom.point='78:100'
+EOF
+
+uci commit ax9000
+exit 0

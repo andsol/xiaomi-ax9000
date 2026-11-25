@@ -1,0 +1,111 @@
+From 68bee582e17e6ee3892f5eca5537d89ddf7fdd13 Mon Sep 17 00:00:00 2001
+From: Andrey <ax9000@users.noreply.invalid>
+Date: Sun, 22 Nov 2026 12:35:13 +0200
+Subject: [PATCH] qualcommax: ipq8074: add ADSS PWM clock
+
+Upstream gcc-ipq8074 has no clock for the PWM block, so the existing
+pwm-ipq driver cannot be used on IPQ807x. Add a kernel patch that
+introduces adss_pwm_clk_src (RCG 0x1c008) and gcc_adss_pwm_clk (CBCR
+0x1c020), with values from Qualcomm's QSDK IPQ807x GCC driver and
+matching upstream gcc-ipq6018. New bindings: ADSS_PWM_CLK_SRC (228),
+GCC_ADSS_PWM_CLK (229).
+
+Signed-off-by: Andrey <ax9000@users.noreply.invalid>
+---
+ ...-qcom-gcc-ipq8074-add-ADSS-PWM-clock.patch | 84 +++++++++++++++++++
+ 1 file changed, 84 insertions(+)
+ create mode 100644 target/linux/qualcommax/patches-6.12/0142-clk-qcom-gcc-ipq8074-add-ADSS-PWM-clock.patch
+
+diff --git a/target/linux/qualcommax/patches-6.12/0142-clk-qcom-gcc-ipq8074-add-ADSS-PWM-clock.patch b/target/linux/qualcommax/patches-6.12/0142-clk-qcom-gcc-ipq8074-add-ADSS-PWM-clock.patch
+new file mode 100644
+index 0000000..4d92cbd
+--- /dev/null
++++ b/target/linux/qualcommax/patches-6.12/0142-clk-qcom-gcc-ipq8074-add-ADSS-PWM-clock.patch
+@@ -0,0 +1,84 @@
++From: Andrey <ax9000@users.noreply.invalid>
++Subject: [PATCH] clk: qcom: gcc-ipq8074: add ADSS PWM clock
++
++The IPQ8074 PWM block (same IP as IPQ6018, driven by pwm-ipq) is clocked
++by the ADSS PWM RCG/branch pair, which the upstream driver does not
++expose. Add adss_pwm_clk_src (CMD_RCGR 0x1c008, parents XO/GPLL0) and
++gcc_adss_pwm_clk (CBCR 0x1c020, enable bit 0).
++
++Register offsets, parent map and the 19.2/200 MHz frequencies are taken
++from Qualcomm's QSDK gcc-ipq807x.c (linux-msm NHSS.QSDK.11.3) and
++gcc-ipq8074.c (linux-ipq-5.4 NHSS.QSDK.12.2.r10); they match the
++upstream gcc-ipq6018 adss_pwm_clk_src/gcc_adss_pwm_clk definitions. A
++100 MHz entry (GPLL0 800 MHz / 8, as used by the IPQ6018 PWM node) is
++added so the pwm-ipq node can use the same assigned-clock-rates.
++
++Signed-off-by: Andrey <ax9000@users.noreply.invalid>
++---
++--- a/drivers/clk/qcom/gcc-ipq8074.c
+++++ b/drivers/clk/qcom/gcc-ipq8074.c
++@@ -4281,6 +4281,44 @@
++ 	},
++ };
++ 
+++static const struct freq_tbl ftbl_adss_pwm_clk_src[] = {
+++	F(19200000, P_XO, 1, 0, 0),
+++	F(100000000, P_GPLL0, 8, 0, 0),
+++	F(200000000, P_GPLL0, 4, 0, 0),
+++	{ }
+++};
+++
+++static struct clk_rcg2 adss_pwm_clk_src = {
+++	.cmd_rcgr = 0x1c008,
+++	.freq_tbl = ftbl_adss_pwm_clk_src,
+++	.hid_width = 5,
+++	.parent_map = gcc_xo_gpll0_map,
+++	.clkr.hw.init = &(struct clk_init_data){
+++		.name = "adss_pwm_clk_src",
+++		.parent_data = gcc_xo_gpll0,
+++		.num_parents = ARRAY_SIZE(gcc_xo_gpll0),
+++		.ops = &clk_rcg2_ops,
+++	},
+++};
+++
+++static struct clk_branch gcc_adss_pwm_clk = {
+++	.halt_reg = 0x1c020,
+++	.halt_bit = 31,
+++	.clkr = {
+++		.enable_reg = 0x1c020,
+++		.enable_mask = BIT(0),
+++		.hw.init = &(struct clk_init_data){
+++			.name = "gcc_adss_pwm_clk",
+++			.parent_hws = (const struct clk_hw *[]){
+++				&adss_pwm_clk_src.clkr.hw,
+++			},
+++			.num_parents = 1,
+++			.flags = CLK_SET_RATE_PARENT,
+++			.ops = &clk_branch2_ops,
+++		},
+++	},
+++};
+++
++ static struct gdsc usb0_gdsc = {
++ 	.gdscr = 0x3e078,
++ 	.pd = {
++@@ -4563,6 +4601,8 @@
++ 	[GCC_PCIE0_RCHNG_CLK] = &gcc_pcie0_rchng_clk.clkr,
++ 	[GCC_PCIE0_AXI_S_BRIDGE_CLK] = &gcc_pcie0_axi_s_bridge_clk.clkr,
++ 	[GCC_CRYPTO_PPE_CLK] = &gcc_crypto_ppe_clk.clkr,
+++	[ADSS_PWM_CLK_SRC] = &adss_pwm_clk_src.clkr,
+++	[GCC_ADSS_PWM_CLK] = &gcc_adss_pwm_clk.clkr,
++ };
++ 
++ static const struct qcom_reset_map gcc_ipq8074_resets[] = {
++--- a/include/dt-bindings/clock/qcom,gcc-ipq8074.h
+++++ b/include/dt-bindings/clock/qcom,gcc-ipq8074.h
++@@ -234,6 +234,8 @@
++ #define GCC_PCIE0_RCHNG_CLK_SRC			225
++ #define GCC_PCIE0_RCHNG_CLK			226
++ #define GCC_CRYPTO_PPE_CLK			227
+++#define ADSS_PWM_CLK_SRC			228
+++#define GCC_ADSS_PWM_CLK			229
++ 
++ #define GCC_BLSP1_BCR				0
++ #define GCC_BLSP1_QUP1_BCR			1
+-- 
+2.47.1.windows.2
+

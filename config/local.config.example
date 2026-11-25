@@ -1,0 +1,5 @@
+# Copy to config/local.config (git-ignored) to add your own packages to the image.
+# Packages with kernel modules must be built in: official kmods do not match this kernel.
+# CONFIG_PACKAGE_sqm-scripts=y
+# CONFIG_PACKAGE_luci-app-sqm=y
+# CONFIG_PACKAGE_usteer=y

@@ -1,0 +1,594 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: ax9000-controls\n"
+"Report-Msgid-Bugs-To: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Silent"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Quietest, runs warmer"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Balanced"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Recommended default"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Aggressive"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Coolest, louder"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Custom"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Your own curve"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Manual"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fixed fan speed"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "No temperature sensor can be read; the fan is forced to 100 %."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The selected fan curve is invalid; the Balanced curve is used instead."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The fan controller was not found; the fan speed cannot be set."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The fan service hit an internal error; the fan runs at full speed."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fan service error: %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "At least 2 points are required."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Minimum duty must be a number between 0 and 100."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Hysteresis must be a non-negative number."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Every point needs a numeric temperature and a duty (a number or \"min\")."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Temperatures must be strictly increasing."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Duty must be between 0 and 100 %."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Status"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Temperature"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fan speed"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fan RPM"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Active mode"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "State"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "hottest selected sensor"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "curve %s, applied %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "revolutions per minute"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "schedule override (set: %s)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Service stopped"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The fan service is not running. Only the kernel failsafe controls the fan (60 % above 75 °C, 100 % above 85 °C)."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Error"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "OK"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fan mode"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Mode"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Saving..."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Saved. %s mode applies within a few seconds."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Could not save the mode: %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fan curve"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Curve"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Now (curve)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Now (applied, 10 % steps)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Temperature, °C"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fan speed, %"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "100 % at 85 °C"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Fan speed against temperature for the %s mode"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Manual fan speed"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Saved. The fan follows the new speed within a few seconds."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Could not save: %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The fan service holds this speed (applied in 10 % steps). Safety limits still apply: the service forces 100 % at 85 °C, and the kernel failsafe raises the fan to at least 60 % above 75 °C even if the service is stopped."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Save curve"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The curve cannot be saved until this is fixed."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "0-100 or min"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Duty, %"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Remove point"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Custom curve saved."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Custom curve"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Add point"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Minimum duty, % (value of \"min\")"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Hysteresis, °C"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Temperatures must be strictly increasing; duty is 0-100 or \"min\". Between points the speed is interpolated; outside them it stays flat. Hysteresis only delays slowing down."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Reset Custom (copy of Balanced)"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Reset %s to defaults"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Reset curves"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "This replaces the stored %s curve with the factory default."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Cancel"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "%s curve restored to defaults."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Reset failed: %s"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Reset"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Select at least one sensor."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Sensors saved."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Save sensors"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Temperature sensors"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The fan follows the hottest of the selected sensors. Sensors that cannot be read are ignored."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Schedule enabled."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Schedule disabled."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "No time windows yet."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Start"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "End"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Remove window"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Row %d: enter a start and an end time."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Schedule saved. %d window(s) with equal start and end are never active."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Schedule saved."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Save schedule"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Schedule"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Switch modes by time of day"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Add window"
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "The first matching window wins. A window may cross midnight (for example 23:00 to 07:00); equal start and end never match. Outside all windows the mode selected above is used."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "Use whole numbers."
+msgstr ""
+
+#: htdocs/luci-static/resources/view/ax9000/fan.js
+msgid "You have unsaved changes in the custom curve or the schedule; they will be discarded."
+msgstr ""
+
+msgid "0 turns the light off, 255 is full brightness."
+msgstr ""
+
+msgid "Amber"
+msgstr ""
+
+msgid "At night"
+msgstr ""
+
+msgid "Blue"
+msgstr ""
+
+msgid "Breathing"
+msgstr ""
+
+msgid "Brightness"
+msgstr ""
+
+msgid "Choose what drives each of the other LEDs. Changes only take effect after you click Save & Apply on this page. The X light is controlled above."
+msgstr ""
+
+msgid "Color"
+msgstr ""
+
+msgid "Color cycle"
+msgstr ""
+
+msgid "Control the X light on top of the router and the other status LEDs."
+msgstr ""
+
+msgid "Current state"
+msgstr ""
+
+msgid "Cyan"
+msgstr ""
+
+msgid "Dim or switch off the X light during the night. Events marked \"Override night\" still show."
+msgstr ""
+
+msgid "Dimmed"
+msgstr ""
+
+msgid "Effect"
+msgstr ""
+
+msgid "Effect speed from 0.1 (slow) to 10 (fast)."
+msgstr ""
+
+msgid "Enable"
+msgstr ""
+
+msgid "Enabled"
+msgstr ""
+
+msgid "Enter a color as #rrggbb, for example #0000ff."
+msgstr ""
+
+msgid "Event"
+msgstr ""
+
+msgid "Events"
+msgstr ""
+
+msgid "Events temporarily replace the X light. When several are active, the highest priority wins."
+msgstr ""
+
+msgid "Firmware upgrade"
+msgstr ""
+
+msgid "Flashing"
+msgstr ""
+
+msgid "Green"
+msgstr ""
+
+msgid "H"
+msgstr ""
+
+msgid "Hue"
+msgstr ""
+
+msgid "L"
+msgstr ""
+
+msgid "LED"
+msgstr ""
+
+msgid "Light off"
+msgstr ""
+
+msgid "Lightness"
+msgstr ""
+
+msgid "Magenta"
+msgstr ""
+
+msgid "Network device"
+msgstr ""
+
+msgid "Network interface watched for the \"No internet\" event."
+msgstr ""
+
+msgid "Network, blue"
+msgstr ""
+
+msgid "Network, yellow"
+msgstr ""
+
+msgid "Night mode"
+msgstr ""
+
+msgid "No internet"
+msgstr ""
+
+msgid "No other controllable LEDs were found."
+msgstr ""
+
+msgid "Off"
+msgstr ""
+
+msgid "Off until reboot"
+msgstr ""
+
+msgid "Orange"
+msgstr ""
+
+msgid "Other LEDs"
+msgstr ""
+
+msgid "Override night"
+msgstr ""
+
+msgid "Pick a color"
+msgstr ""
+
+msgid "Preview"
+msgstr ""
+
+msgid "Preview failed: %s"
+msgstr ""
+
+msgid "Previewing the current, unsaved settings for %d seconds."
+msgstr ""
+
+msgid "Priority"
+msgstr ""
+
+msgid "Purple"
+msgstr ""
+
+msgid "Rainbow"
+msgstr ""
+
+msgid "Red"
+msgstr ""
+
+msgid "S"
+msgstr ""
+
+msgid "Saturation"
+msgstr ""
+
+msgid "Shows the current, unsaved settings on the light for %d seconds, then the saved setup returns."
+msgstr ""
+
+msgid "Speed"
+msgstr ""
+
+msgid "Static"
+msgstr ""
+
+msgid "System, blue"
+msgstr ""
+
+msgid "System, yellow"
+msgstr ""
+
+msgid "The LED service is not running."
+msgstr ""
+
+msgid "Turn back on"
+msgstr ""
+
+msgid "WAN interface"
+msgstr ""
+
+msgid "WPS pairing"
+msgstr ""
+
+msgid "White"
+msgstr ""
+
+msgid "X light"
+msgstr ""
+
+msgid "X light not found: the PWM LED device is missing in this image."
+msgstr ""
+
+msgid "Yellow"
+msgstr ""
+
+msgid "night mode"
+msgstr ""
+
+msgid "AX9000 Controls"
+msgstr ""
+
+msgid "Fan"
+msgstr ""
+
+msgid "Preview of the X light"
+msgstr ""
+
+msgid "The light already shows these settings — change the color or effect to see a preview."
+msgstr ""
+
+msgid "Mode changes are saved immediately."
+msgstr ""

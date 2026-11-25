@@ -1,0 +1,176 @@
+#!/usr/bin/ucode
+'use strict';
+
+// ax9000-fand: temperature-driven fan control for the Xiaomi AX9000.
+// Every tick: read UCI + sensors, decide a duty (fanctl.uc), write the EMC2301
+// pwm1 and publish the state to /var/run/ax9000-fand.json.
+//
+// On exit (SIGTERM) pwm1 is left at the last duty, and the kernel thermal trip
+// points (75 C / 85 C) keep working without this service. While we run they
+// cannot be undercut either: the emc2305 driver arbitrates
+// max(thermal cooling state, last hwmon pwm1 write), so a low curve duty never
+// lowers a fan speed the kernel failsafe asked for.
+//
+// Test hooks (unused in production):
+//   AX9000_FAND_ROOT=<dir>         prefix for /sys
+//   AX9000_FAND_STATE=<file>       state file instead of /var/run/ax9000-fand.json
+//   AX9000_FAND_UCI_JSON=<file>    uci get_all('ax9000') dump instead of libuci
+//   AX9000_FAND_ONCE=1             run a single tick and exit (no uloop)
+
+import * as fs from 'fs';
+import * as sensors from '/usr/share/ax9000/sensors.uc';
+import * as fanctl from '/usr/share/ax9000/fanctl.uc';
+
+const ROOT = getenv('AX9000_FAND_ROOT') ?? '';
+const SYS = ROOT + '/sys';
+const STATE_FILE = getenv('AX9000_FAND_STATE') ?? '/var/run/ax9000-fand.json';
+const UCI_JSON = getenv('AX9000_FAND_UCI_JSON');
+const ONCE = getenv('AX9000_FAND_ONCE') == '1';
+
+let state = null;       // hysteresis state carried between ticks
+let hw = null;          // hwmon dir of the EMC2301
+let last_pwm = null;    // last pwm1 value we wrote
+let last_write = 0;     // time of that write
+let last_log = {};      // message -> time, for log rate limiting
+
+const REWRITE_EVERY = 60; // seconds: refresh pwm1 even when unchanged
+const LOG_EVERY = 60;     // seconds: repeat an identical log line at most this often
+
+function log(msg) {
+	let now = clock(true)[0]; // monotonic: immune to NTP/RTC steps
+	if (last_log[msg] != null && now - last_log[msg] < LOG_EVERY)
+		return;
+	last_log[msg] = now;
+	warn('ax9000-fand: ' + msg + '\n');
+}
+
+function trim(s) {
+	return type(s) == 'string' ? replace(s, /^[ \t\r\n]+|[ \t\r\n]+$/g, '') : null;
+}
+
+function load_uci() {
+	if (UCI_JSON)
+		return json(fs.readfile(UCI_JSON));
+	let uci = require('uci');
+	return uci.cursor().get_all('ax9000');
+}
+
+function find_hwmon() {
+	for (let h in sort(fs.lsdir(SYS + '/class/hwmon') ?? [])) {
+		if (!match(h, /^hwmon[0-9]+$/))
+			continue;
+		let dir = SYS + '/class/hwmon/' + h;
+		if (trim(fs.readfile(dir + '/name')) == 'emc2305')
+			return dir;
+	}
+	return null;
+}
+
+// The emc2305 driver only has cooling states 0..10 (10 % steps, rounded to
+// the closest), so round the wanted duty UP to the next step: never run slower
+// than the curve asks. pwm1 has no pwm1_enable attribute in this driver.
+// Returns the applied duty in percent, or null when nothing could be written.
+function write_pwm(duty) {
+	let step = fanctl.pwm_step(duty);
+	let pwm = step.pwm;
+	let now = clock(true)[0]; // monotonic: immune to NTP/RTC steps
+	if (pwm != last_pwm || now - last_write >= REWRITE_EVERY) {
+		if (fs.writefile(hw + '/pwm1', '' + pwm) == null) {
+			log('cannot write ' + hw + '/pwm1');
+			return null;
+		}
+		last_pwm = pwm;
+		last_write = now;
+	}
+	return step.pct;
+}
+
+function publish(status) {
+	let tmp = STATE_FILE + '.tmp';
+	if (fs.writefile(tmp, sprintf('%J', status)) == null) {
+		log('cannot write ' + tmp);
+		return;
+	}
+	fs.rename(tmp, STATE_FILE);
+}
+
+// One control step. Returns the next interval in seconds.
+function tick() {
+	let cfg = fanctl.parse_uci(load_uci());
+	let lt = localtime();
+	let now = lt.hour * 60 + lt.min;
+
+	let dir = find_hwmon();
+	if (dir != hw) {
+		hw = dir;
+		last_pwm = null;
+	}
+
+	let found = sensors.discover(fs, SYS);
+	let readings = sensors.read_all(fs, found, cfg.sensors);
+
+	let res;
+	try {
+		res = fanctl.decide(state, readings, cfg, now);
+	}
+	catch (e) {
+		// Never leave the fan low because of a bug: fail safe.
+		log('decision failed: ' + e);
+		res = { duty: 100, mode: cfg.mode, temp: null, error: 'internal', state: null };
+	}
+	state = res.state;
+
+	let rpm = null, applied = null;
+	if (hw) {
+		applied = write_pwm(res.duty);
+		let v = trim(fs.readfile(hw + '/fan1_input'));
+		if (v != null && match(v, /^[0-9]+$/))
+			rpm = int(v);
+	}
+
+	publish({
+		ts: clock(true)[0],
+		interval: cfg.interval,
+		mode: cfg.mode,
+		active_mode: res.mode,
+		temp: res.temp,
+		duty: res.duty,
+		duty_applied: applied,
+		rpm: rpm,
+		sensors: readings,
+		error: res.error ?? (hw ? null : 'no_fan')
+	});
+
+	return cfg.interval;
+}
+
+function safe_tick() {
+	try {
+		return tick();
+	}
+	catch (e) {
+		log('tick failed: ' + e);
+		let applied = null;
+		if (hw) {
+			try { applied = write_pwm(100); } catch (e2) {}
+		}
+		try {
+			publish({ ts: clock(true)[0], interval: 5, duty: 100, duty_applied: applied, error: 'internal' });
+		}
+		catch (e2) {}
+		return 5;
+	}
+}
+
+if (ONCE) {
+	safe_tick();
+}
+else {
+	const uloop = require('uloop');
+	uloop.init();
+	let timer;
+	timer = uloop.timer(0, function() {
+		timer.set(safe_tick() * 1000);
+	});
+	uloop.run(); // returns on SIGTERM/SIGINT; pwm1 is left as is
+}

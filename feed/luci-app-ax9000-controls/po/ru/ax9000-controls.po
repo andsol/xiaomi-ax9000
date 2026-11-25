@@ -1,0 +1,503 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: ax9000-controls\n"
+"Language: ru\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n%10==1 && n%100!=11 ? 0 : n%10>=2 && n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
+
+msgid "Silent"
+msgstr "Тихий"
+
+msgid "Quietest, runs warmer"
+msgstr "Самый тихий, но теплее"
+
+msgid "Balanced"
+msgstr "Сбалансированный"
+
+msgid "Recommended default"
+msgstr "Рекомендуется по умолчанию"
+
+msgid "Aggressive"
+msgstr "Агрессивный"
+
+msgid "Coolest, louder"
+msgstr "Холоднее, но громче"
+
+msgid "Custom"
+msgstr "Свой"
+
+msgid "Your own curve"
+msgstr "Ваша кривая"
+
+msgid "Manual"
+msgstr "Ручной"
+
+msgid "Fixed fan speed"
+msgstr "Фиксированная скорость"
+
+msgid "No temperature sensor can be read; the fan is forced to 100 %."
+msgstr "Ни один датчик температуры не читается; вентилятор принудительно на 100 %."
+
+msgid "The selected fan curve is invalid; the Balanced curve is used instead."
+msgstr "Выбранная кривая вентилятора некорректна; вместо неё используется кривая «Сбалансированный»."
+
+msgid "The fan controller was not found; the fan speed cannot be set."
+msgstr "Контроллер вентилятора не найден; скорость задать нельзя."
+
+msgid "The fan service hit an internal error; the fan runs at full speed."
+msgstr "Внутренняя ошибка службы вентилятора; вентилятор работает на полной скорости."
+
+msgid "Fan service error: %s"
+msgstr "Ошибка службы вентилятора: %s"
+
+msgid "At least 2 points are required."
+msgstr "Нужно не менее 2 точек."
+
+msgid "Minimum duty must be a number between 0 and 100."
+msgstr "Минимальная скорость должна быть числом от 0 до 100."
+
+msgid "Hysteresis must be a non-negative number."
+msgstr "Гистерезис должен быть неотрицательным числом."
+
+msgid "Every point needs a numeric temperature and a duty (a number or \"min\")."
+msgstr "У каждой точки должны быть числовая температура и скорость (число или «min»)."
+
+msgid "Temperatures must be strictly increasing."
+msgstr "Температуры должны строго возрастать."
+
+msgid "Duty must be between 0 and 100 %."
+msgstr "Скорость должна быть от 0 до 100 %."
+
+msgid "Status"
+msgstr "Состояние"
+
+msgid "Temperature"
+msgstr "Температура"
+
+msgid "Fan speed"
+msgstr "Скорость вентилятора"
+
+msgid "Fan RPM"
+msgstr "Обороты вентилятора"
+
+msgid "Active mode"
+msgstr "Активный режим"
+
+msgid "State"
+msgstr "Статус"
+
+msgid "hottest selected sensor"
+msgstr "самый горячий из выбранных датчиков"
+
+msgid "curve %s, applied %s"
+msgstr "по кривой %s, установлено %s"
+
+msgid "revolutions per minute"
+msgstr "оборотов в минуту"
+
+msgid "schedule override (set: %s)"
+msgstr "по расписанию (выбрано: %s)"
+
+msgid "Service stopped"
+msgstr "Служба остановлена"
+
+msgid "The fan service is not running. Only the kernel failsafe controls the fan (60 % above 75 °C, 100 % above 85 °C)."
+msgstr "Служба вентилятора не запущена. Вентилятором управляет только аварийная защита ядра (60 % выше 75 °C, 100 % выше 85 °C)."
+
+msgid "Error"
+msgstr "Ошибка"
+
+msgid "OK"
+msgstr "ОК"
+
+msgid "Fan mode"
+msgstr "Режим вентилятора"
+
+msgid "Mode"
+msgstr "Режим"
+
+msgid "Saving..."
+msgstr "Сохранение..."
+
+msgid "Saved. %s mode applies within a few seconds."
+msgstr "Сохранено. Режим «%s» применится через несколько секунд."
+
+msgid "Could not save the mode: %s"
+msgstr "Не удалось сохранить режим: %s"
+
+msgid "Fan curve"
+msgstr "Кривая вентилятора"
+
+msgid "Curve"
+msgstr "Кривая"
+
+msgid "Now (curve)"
+msgstr "Сейчас (по кривой)"
+
+msgid "Now (applied, 10 % steps)"
+msgstr "Сейчас (установлено, шаг 10 %)"
+
+msgid "Temperature, °C"
+msgstr "Температура, °C"
+
+msgid "Fan speed, %"
+msgstr "Скорость вентилятора, %"
+
+msgid "100 % at 85 °C"
+msgstr "100 % при 85 °C"
+
+msgid "Fan speed against temperature for the %s mode"
+msgstr "Скорость вентилятора в зависимости от температуры, режим «%s»"
+
+msgid "Manual fan speed"
+msgstr "Ручная скорость вентилятора"
+
+msgid "Saved. The fan follows the new speed within a few seconds."
+msgstr "Сохранено. Вентилятор перейдёт на новую скорость через несколько секунд."
+
+msgid "Could not save: %s"
+msgstr "Не удалось сохранить: %s"
+
+msgid "The fan service holds this speed (applied in 10 % steps). Safety limits still apply: the service forces 100 % at 85 °C, and the kernel failsafe raises the fan to at least 60 % above 75 °C even if the service is stopped."
+msgstr "Служба удерживает эту скорость (шагами по 10 %). Защитные ограничения действуют всегда: служба включает 100 % при 85 °C, а аварийная защита ядра поднимает вентилятор минимум до 60 % выше 75 °C, даже если служба остановлена."
+
+msgid "Save curve"
+msgstr "Сохранить кривую"
+
+msgid "The curve cannot be saved until this is fixed."
+msgstr "Кривую нельзя сохранить, пока это не исправлено."
+
+msgid "0-100 or min"
+msgstr "0-100 или min"
+
+msgid "Duty, %"
+msgstr "Скорость, %"
+
+msgid "Remove point"
+msgstr "Удалить точку"
+
+msgid "Custom curve saved."
+msgstr "Своя кривая сохранена."
+
+msgid "Custom curve"
+msgstr "Своя кривая"
+
+msgid "Add point"
+msgstr "Добавить точку"
+
+msgid "Minimum duty, % (value of \"min\")"
+msgstr "Минимальная скорость, % (значение «min»)"
+
+msgid "Hysteresis, °C"
+msgstr "Гистерезис, °C"
+
+msgid "Temperatures must be strictly increasing; duty is 0-100 or \"min\". Between points the speed is interpolated; outside them it stays flat. Hysteresis only delays slowing down."
+msgstr "Температуры должны строго возрастать; скорость задаётся числом 0-100 или «min». Между точками скорость интерполируется, за пределами остаётся постоянной. Гистерезис лишь задерживает снижение скорости."
+
+msgid "Reset Custom (copy of Balanced)"
+msgstr "Сбросить «Свой» (копия «Сбалансированного»)"
+
+msgid "Reset %s to defaults"
+msgstr "Сбросить «%s» к умолчаниям"
+
+msgid "Reset curves"
+msgstr "Сброс кривых"
+
+msgid "This replaces the stored %s curve with the factory default."
+msgstr "Сохранённая кривая «%s» будет заменена заводской."
+
+msgid "Cancel"
+msgstr "Отмена"
+
+msgid "%s curve restored to defaults."
+msgstr "Кривая «%s» восстановлена."
+
+msgid "Reset failed: %s"
+msgstr "Не удалось сбросить: %s"
+
+msgid "Reset"
+msgstr "Сбросить"
+
+msgid "Select at least one sensor."
+msgstr "Выберите хотя бы один датчик."
+
+msgid "Sensors saved."
+msgstr "Датчики сохранены."
+
+msgid "Save sensors"
+msgstr "Сохранить датчики"
+
+msgid "Temperature sensors"
+msgstr "Датчики температуры"
+
+msgid "The fan follows the hottest of the selected sensors. Sensors that cannot be read are ignored."
+msgstr "Вентилятор ориентируется на самый горячий из выбранных датчиков. Нечитаемые датчики игнорируются."
+
+msgid "Schedule enabled."
+msgstr "Расписание включено."
+
+msgid "Schedule disabled."
+msgstr "Расписание выключено."
+
+msgid "No time windows yet."
+msgstr "Интервалов пока нет."
+
+msgid "Start"
+msgstr "Начало"
+
+msgid "End"
+msgstr "Конец"
+
+msgid "Remove window"
+msgstr "Удалить интервал"
+
+msgid "Row %d: enter a start and an end time."
+msgstr "Строка %d: укажите время начала и конца."
+
+msgid "Schedule saved. %d window(s) with equal start and end are never active."
+msgstr "Расписание сохранено. Интервалы с одинаковыми началом и концом (%d) никогда не действуют."
+
+msgid "Schedule saved."
+msgstr "Расписание сохранено."
+
+msgid "Save schedule"
+msgstr "Сохранить расписание"
+
+msgid "Schedule"
+msgstr "Расписание"
+
+msgid "Switch modes by time of day"
+msgstr "Переключать режимы по времени суток"
+
+msgid "Add window"
+msgstr "Добавить интервал"
+
+msgid "The first matching window wins. A window may cross midnight (for example 23:00 to 07:00); equal start and end never match. Outside all windows the mode selected above is used."
+msgstr "Действует первый подходящий интервал. Интервал может переходить через полночь (например, с 23:00 до 07:00); одинаковые начало и конец никогда не совпадают. Вне интервалов используется режим, выбранный выше."
+
+msgid "Use whole numbers."
+msgstr "Используйте целые числа."
+
+msgid "You have unsaved changes in the custom curve or the schedule; they will be discarded."
+msgstr "Есть несохранённые изменения в своей кривой или расписании; они будут потеряны."
+
+msgid "0 turns the light off, 255 is full brightness."
+msgstr "0 выключает подсветку, 255 — полная яркость."
+
+msgid "Amber"
+msgstr "Янтарный"
+
+msgid "At night"
+msgstr "Ночью"
+
+msgid "Blue"
+msgstr "Синий"
+
+msgid "Breathing"
+msgstr "Дыхание"
+
+msgid "Brightness"
+msgstr "Яркость"
+
+msgid "Choose what drives each of the other LEDs. Changes only take effect after you click Save & Apply on this page. The X light is controlled above."
+msgstr "Выберите, чем управляется каждый из остальных индикаторов. Изменения вступают в силу только после нажатия «Сохранить и применить» на этой странице. Подсветка X настраивается выше."
+
+msgid "Color"
+msgstr "Цвет"
+
+msgid "Color cycle"
+msgstr "Смена цветов"
+
+msgid "Control the X light on top of the router and the other status LEDs."
+msgstr "Управление подсветкой X на верхней панели роутера и остальными индикаторами состояния."
+
+msgid "Current state"
+msgstr "Текущее состояние"
+
+msgid "Cyan"
+msgstr "Голубой"
+
+msgid "Dim or switch off the X light during the night. Events marked \"Override night\" still show."
+msgstr "Приглушать или выключать подсветку X ночью. События с отметкой «Игнорировать ночной режим» всё равно отображаются."
+
+msgid "Dimmed"
+msgstr "Приглушена"
+
+msgid "Effect"
+msgstr "Эффект"
+
+msgid "Effect speed from 0.1 (slow) to 10 (fast)."
+msgstr "Скорость эффекта от 0,1 (медленно) до 10 (быстро)."
+
+msgid "Enable"
+msgstr "Включить"
+
+msgid "Enabled"
+msgstr "Включено"
+
+msgid "Enter a color as #rrggbb, for example #0000ff."
+msgstr "Введите цвет в формате #rrggbb, например #0000ff."
+
+msgid "Event"
+msgstr "Событие"
+
+msgid "Events"
+msgstr "События"
+
+msgid "Events temporarily replace the X light. When several are active, the highest priority wins."
+msgstr "События временно заменяют обычную подсветку X. Если активно несколько, побеждает событие с наибольшим приоритетом."
+
+msgid "Firmware upgrade"
+msgstr "Обновление прошивки"
+
+msgid "Flashing"
+msgstr "Мигание"
+
+msgid "Green"
+msgstr "Зелёный"
+
+msgid "H"
+msgstr "О"
+
+msgid "Hue"
+msgstr "Оттенок"
+
+msgid "L"
+msgstr "Я"
+
+msgid "LED"
+msgstr "Индикаторы"
+
+msgid "Light off"
+msgstr "Выключена"
+
+msgid "Lightness"
+msgstr "Яркость цвета"
+
+msgid "Magenta"
+msgstr "Пурпурный"
+
+msgid "Network device"
+msgstr "Сетевое устройство"
+
+msgid "Network interface watched for the \"No internet\" event."
+msgstr "Сетевой интерфейс, который отслеживается для события «Нет интернета»."
+
+msgid "Network, blue"
+msgstr "Сеть, синий"
+
+msgid "Network, yellow"
+msgstr "Сеть, жёлтый"
+
+msgid "Night mode"
+msgstr "Ночной режим"
+
+msgid "No internet"
+msgstr "Нет интернета"
+
+msgid "No other controllable LEDs were found."
+msgstr "Других управляемых индикаторов не найдено."
+
+msgid "Off"
+msgstr "Выключено"
+
+msgid "Off until reboot"
+msgstr "Выключить до перезагрузки"
+
+msgid "Orange"
+msgstr "Оранжевый"
+
+msgid "Other LEDs"
+msgstr "Другие индикаторы"
+
+msgid "Override night"
+msgstr "Игнорировать ночной режим"
+
+msgid "Pick a color"
+msgstr "Выбрать цвет"
+
+msgid "Preview"
+msgstr "Предпросмотр"
+
+msgid "Preview failed: %s"
+msgstr "Не удалось выполнить предпросмотр: %s"
+
+msgid "Previewing the current, unsaved settings for %d seconds."
+msgstr "Предпросмотр текущих несохранённых настроек в течение %d с."
+
+msgid "Priority"
+msgstr "Приоритет"
+
+msgid "Purple"
+msgstr "Фиолетовый"
+
+msgid "Rainbow"
+msgstr "Радуга"
+
+msgid "Red"
+msgstr "Красный"
+
+msgid "S"
+msgstr "Н"
+
+msgid "Saturation"
+msgstr "Насыщенность"
+
+msgid "Shows the current, unsaved settings on the light for %d seconds, then the saved setup returns."
+msgstr "Показывает текущие несохранённые настройки на %d с, затем возвращается сохранённая конфигурация."
+
+msgid "Speed"
+msgstr "Скорость"
+
+msgid "Static"
+msgstr "Постоянный"
+
+msgid "System, blue"
+msgstr "Система, синий"
+
+msgid "System, yellow"
+msgstr "Система, жёлтый"
+
+msgid "The LED service is not running."
+msgstr "Служба подсветки не запущена."
+
+msgid "Turn back on"
+msgstr "Включить снова"
+
+msgid "WAN interface"
+msgstr "WAN-интерфейс"
+
+msgid "WPS pairing"
+msgstr "Подключение по WPS"
+
+msgid "White"
+msgstr "Белый"
+
+msgid "X light"
+msgstr "Подсветка X"
+
+msgid "X light not found: the PWM LED device is missing in this image."
+msgstr "Подсветка X не найдена: в этой прошивке отсутствует PWM-устройство индикатора."
+
+msgid "Yellow"
+msgstr "Жёлтый"
+
+msgid "night mode"
+msgstr "ночной режим"
+
+msgid "AX9000 Controls"
+msgstr "Управление AX9000"
+
+msgid "Fan"
+msgstr "Вентилятор"
+
+msgid "Preview of the X light"
+msgstr "Предпросмотр подсветки X"
+
+msgid "The light already shows these settings — change the color or effect to see a preview."
+msgstr "Подсветка уже показывает эти настройки — измените цвет или эффект, чтобы увидеть предпросмотр."
+
+msgid "Mode changes are saved immediately."
+msgstr "Смена режима сохраняется сразу."

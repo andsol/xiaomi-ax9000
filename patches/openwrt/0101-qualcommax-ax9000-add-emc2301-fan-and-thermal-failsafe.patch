@@ -1,0 +1,268 @@
+From 2c9a0bbb6758d5f3b1625f8a27ea844307517168 Mon Sep 17 00:00:00 2001
+From: ax9000-build <build@ax9000.invalid>
+Date: Sun, 22 Nov 2026 11:00:09 +0000
+Subject: [PATCH] qualcommax: ax9000: add EMC2301 fan and thermal failsafe
+
+Declare the EMC2301 fan controller (0x2f on blsp1_i2c6) using the
+backported emc2305 OF binding, add active trips at 75/85 C with
+cooling maps on the CPU, NSS and WCSS PHY thermal zones so the kernel
+raises the fan without any userspace daemon, and ship
+kmod-hwmon-emc2305 in the xiaomi_ax9000 image.
+
+Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>
+---
+ .../arm64/boot/dts/qcom/ipq8072-ax9000.dts    | 219 ++++++++++++++++++
+ target/linux/qualcommax/image/ipq807x.mk      |   3 +-
+ 2 files changed, 221 insertions(+), 1 deletion(-)
+
+diff --git a/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
+index 54c1388597..f324f42fa4 100644
+--- a/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
++++ b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
+@@ -121,6 +121,22 @@
+ 
+ 	pinctrl-0 = <&i2c_pins>;
+ 	pinctrl-names = "default";
++
++	/* EMC2301 is only matched by the "microchip,emc2305" fallback. */
++	fan_controller: fan-controller@2f {
++		compatible = "microchip,emc2301", "microchip,emc2305";
++		reg = <0x2f>;
++		#address-cells = <1>;
++		#size-cells = <0>;
++		#pwm-cells = <3>;
++
++		/* 26 kHz, normal polarity, push-pull output */
++		fan0: fan@0 {
++			reg = <0>;
++			pwms = <&fan_controller 26000 0 1>;
++			#cooling-cells = <2>;
++		};
++	};
+ };
+ 
+ &prng {
+@@ -576,3 +592,206 @@
+ 
+ 	qcom,ath11k-calibration-variant = "Xiaomi-AX9000";
+ };
++
++/*
++ * Kernel thermal failsafe for the fan: these trips act even when no
++ * userspace fan daemon is running. The EMC2305 driver exposes cooling
++ * states 0..10 (state * 255 / 10 PWM duty), so state 6 is ~60 % and
++ * state 10 is 100 %.
++ */
++
++&cpu0_thermal {
++	trips {
++		cpu0_fan_warm: fan_warm {
++			temperature = <75000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		cpu0_fan_hot: fan_hot {
++			temperature = <85000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		map-warm {
++			trip = <&cpu0_fan_warm>;
++			cooling-device = <&fan0 6 10>;
++		};
++
++		map-hot {
++			trip = <&cpu0_fan_hot>;
++			cooling-device = <&fan0 10 10>;
++		};
++	};
++};
++
++&cpu1_thermal {
++	trips {
++		cpu1_fan_warm: fan_warm {
++			temperature = <75000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		cpu1_fan_hot: fan_hot {
++			temperature = <85000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		map-warm {
++			trip = <&cpu1_fan_warm>;
++			cooling-device = <&fan0 6 10>;
++		};
++
++		map-hot {
++			trip = <&cpu1_fan_hot>;
++			cooling-device = <&fan0 10 10>;
++		};
++	};
++};
++
++&cpu2_thermal {
++	trips {
++		cpu2_fan_warm: fan_warm {
++			temperature = <75000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		cpu2_fan_hot: fan_hot {
++			temperature = <85000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		map-warm {
++			trip = <&cpu2_fan_warm>;
++			cooling-device = <&fan0 6 10>;
++		};
++
++		map-hot {
++			trip = <&cpu2_fan_hot>;
++			cooling-device = <&fan0 10 10>;
++		};
++	};
++};
++
++&cpu3_thermal {
++	trips {
++		cpu3_fan_warm: fan_warm {
++			temperature = <75000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		cpu3_fan_hot: fan_hot {
++			temperature = <85000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		map-warm {
++			trip = <&cpu3_fan_warm>;
++			cooling-device = <&fan0 6 10>;
++		};
++
++		map-hot {
++			trip = <&cpu3_fan_hot>;
++			cooling-device = <&fan0 10 10>;
++		};
++	};
++};
++
++&{/thermal-zones/nss-top-thermal} {
++	trips {
++		nss_top_fan_warm: fan_warm {
++			temperature = <75000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		nss_top_fan_hot: fan_hot {
++			temperature = <85000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		map-warm {
++			trip = <&nss_top_fan_warm>;
++			cooling-device = <&fan0 6 10>;
++		};
++
++		map-hot {
++			trip = <&nss_top_fan_hot>;
++			cooling-device = <&fan0 10 10>;
++		};
++	};
++};
++
++&{/thermal-zones/wcss-phya0-thermal} {
++	trips {
++		wcss_phya0_fan_warm: fan_warm {
++			temperature = <75000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		wcss_phya0_fan_hot: fan_hot {
++			temperature = <85000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		map-warm {
++			trip = <&wcss_phya0_fan_warm>;
++			cooling-device = <&fan0 6 10>;
++		};
++
++		map-hot {
++			trip = <&wcss_phya0_fan_hot>;
++			cooling-device = <&fan0 10 10>;
++		};
++	};
++};
++
++&{/thermal-zones/wcss-phyb0-thermal} {
++	trips {
++		wcss_phyb0_fan_warm: fan_warm {
++			temperature = <75000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++
++		wcss_phyb0_fan_hot: fan_hot {
++			temperature = <85000>;
++			hysteresis = <3000>;
++			type = "active";
++		};
++	};
++
++	cooling-maps {
++		map-warm {
++			trip = <&wcss_phyb0_fan_warm>;
++			cooling-device = <&fan0 6 10>;
++		};
++
++		map-hot {
++			trip = <&wcss_phyb0_fan_hot>;
++			cooling-device = <&fan0 10 10>;
++		};
++	};
++};
+diff --git a/target/linux/qualcommax/image/ipq807x.mk b/target/linux/qualcommax/image/ipq807x.mk
+index f356bbbca5..dcd07408f0 100644
+--- a/target/linux/qualcommax/image/ipq807x.mk
++++ b/target/linux/qualcommax/image/ipq807x.mk
+@@ -483,7 +483,8 @@ define Device/xiaomi_ax9000
+ 	SOC := ipq8072
+ 	KERNEL_SIZE := 57344k
+ 	DEVICE_PACKAGES := ipq-wifi-xiaomi_ax9000 kmod-ath11k-pci ath11k-firmware-qcn9074 \
+-		kmod-ath10k-ct ath10k-firmware-qca9887-ct
++		kmod-ath10k-ct ath10k-firmware-qca9887-ct \
++		kmod-hwmon-emc2305
+ ifeq ($(IB),)
+ ifneq ($(CONFIG_TARGET_ROOTFS_INITRAMFS),)
+ 	ARTIFACTS := initramfs-factory.ubi
+-- 
+2.39.5
+

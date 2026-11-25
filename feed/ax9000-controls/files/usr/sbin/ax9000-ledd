@@ -1,0 +1,311 @@
+#!/usr/bin/env ucode
+// ax9000-ledd: drives the multicolor X-light (rgb:indicator).
+//
+// Start it as `ucode -L "/usr/share/ax9000/*.uc" /usr/sbin/ax9000-ledd` (the
+// init script does). Decision logic lives in ledctl.uc / ledfx.uc.
+//
+// Timing: a ~30 Hz timer runs only while the current effect is animated;
+// otherwise the service wakes every 500 ms. All file/ubus polling (events,
+// preview file, off flag, upgrade files) happens at most every 500 ms, also
+// while animating. Static colors are written to sysfs once. tick() never
+// throws out of the timer: errors are logged (rate limited) and retried.
+//
+// Test overrides (environment): AX9000_LED_ROOT prefixes /sys and /var/run
+// and /tmp paths, AX9000_LED_CONFDIR is the UCI config dir,
+// AX9000_LED_EVENTS="offline,wps" fakes the active events (no ubus),
+// AX9000_LED_TICKS=n runs n ticks (2.1 s apart) and exits,
+// AX9000_LED_FAULT=n makes tick number n throw (exercises the guard).
+
+import * as uloop from 'uloop';
+import * as ubus from 'ubus';
+import { cursor } from 'uci';
+import { readfile, writefile, rename, unlink, stat } from 'fs';
+import { EFFECTS } from 'ledfx';
+import { parse_uci, decide, is_conn_error } from 'ledctl';
+
+const ROOT = getenv('AX9000_LED_ROOT') ?? '';
+const CONFDIR = getenv('AX9000_LED_CONFDIR');
+const FAKE_EVENTS = getenv('AX9000_LED_EVENTS');
+const TICKS = +(getenv('AX9000_LED_TICKS') ?? 0);
+const FAULT = +(getenv('AX9000_LED_FAULT') ?? 0);
+
+const LED_DIR = ROOT + '/sys/class/leds/rgb:indicator';
+const STATE_FILE = ROOT + '/var/run/ax9000-ledd.json';
+const PREVIEW_FILE = ROOT + '/var/run/ax9000-ledd.preview';
+const OFF_FILE = ROOT + '/var/run/ax9000-ledd.off';
+const UPGRADE_FILES = [ROOT + '/tmp/firmware.bin', ROOT + '/tmp/sysupgrade.img'];
+
+const FAST_MS = 33;      // ~30 Hz while animated
+const SLOW_MS = 500;     // idle wake-up and file polling cadence
+const ERR_MS = 5000;     // no LED / tick error: retry rarely, never spin
+const WAN_MS = 5000;     // offline re-check (also on ubus network.interface events)
+const WPS_MS = 1000;
+const CONN_RETRY_MS = 2000;
+const UBUS_TIMEOUT_S = 3; // bounds every synchronous ubus call
+const HEARTBEAT_MS = 5000; // status file refresh (plugin reports stale after 10 s)
+const LOG_REPEAT_MS = 60000;
+
+let cfg = null;
+let conn = null;
+let listener = null;     // must stay referenced or the listener is freed
+let conn_due = 0;
+let timer = null;
+let events = {};
+let off_flag = false;
+let wan_due = 0, wps_due = 0, slow_due = 0;
+let preview = null, preview_raw = null;
+let last_applied = { intensity: null, brightness: null };
+let last_state_json = null, last_state_at = -HEARTBEAT_MS;
+let led_error = null;
+let logged_missing = false, logged_write_fail = false;
+let last_err = null, last_err_at = 0;
+let tick_no = 0;
+let write_retry_due = 0;
+
+function mono_ms() {
+	let c = clock(true);
+	return c[0] * 1000 + int(c[1] / 1000000);
+}
+
+function load_cfg() {
+	let uci = cursor(CONFDIR);
+	let sections = [];
+	uci.load('ax9000');
+	uci.foreach('ax9000', null, s => { push(sections, s); });
+	uci.unload('ax9000');
+	cfg = parse_uci(sections);
+}
+
+function ensure_ubus(now) {
+	if (conn || now < conn_due)
+		return conn;
+	conn_due = now + CONN_RETRY_MS;
+	conn = ubus.connect(null, UBUS_TIMEOUT_S);
+	if (conn) {
+		listener = conn.listener('network.interface', () => { wan_due = 0; });
+		wan_due = 0;
+		wps_due = 0;
+	}
+	return conn;
+}
+
+// Returns [result, conn_failed]. Only connection-level errors (see
+// is_conn_error) drop the connection; every other method error (Not found,
+// Not supported, No data, ...) is non-fatal for that call only.
+// After a drop the next ensure_ubus() reconnects and re-registers the listener.
+function ubus_call(obj, method) {
+	let res = conn.call(obj, method);
+	if (res != null)
+		return [res, false];
+	let err = conn.error();
+	if (is_conn_error(err)) {
+		warn('ax9000-ledd: ubus ' + obj + ' ' + method + ': ' + err + ', reconnecting\n');
+		listener = null;
+		conn = null;
+		return [null, true];
+	}
+	return [null, false];
+}
+
+// No such interface (e.g. a dumb AP without "wan") -> never offline.
+// On a ubus failure keep the previous answer.
+function check_offline() {
+	if (!conn)
+		return events.offline ?? false;
+	let res = ubus_call('network.interface.' + cfg.led.wan_iface, 'status'), st = res[0];
+	if (res[1])
+		return events.offline ?? false;
+	if (st == null)
+		return false;
+	if (!st.up)
+		return true;
+	for (let rt in st.route ?? [])
+		if (rt.mask == 0 && (rt.target == "0.0.0.0" || rt.target == "::"))
+			return false;
+	return true;
+}
+
+function check_wps() {
+	if (!conn)
+		return events.wps ?? false;
+	let names = conn.list();
+	if (names == null) {
+		warn("ax9000-ledd: ubus list failed, reconnecting\n");
+		listener = null;
+		conn = null;
+		return events.wps ?? false;
+	}
+	for (let name in names)
+		if (index(name, 'hostapd.') == 0) {
+			let r = ubus_call(name, 'wps_status'), st = r[0], failed = r[1];
+			if (failed)
+				return events.wps ?? false;
+			if (st?.pbc_status == 'Active')
+				return true;
+		}
+	return false;
+}
+
+function refresh_events(now, poll_files) {
+	if (FAKE_EVENTS != null) {
+		events = {};
+		for (let n in split(FAKE_EVENTS, ','))
+			events[n] = true;
+		return;
+	}
+
+	ensure_ubus(now);
+	if (now >= wan_due) {
+		events.offline = check_offline();
+		wan_due = now + WAN_MS;
+	}
+	if (now >= wps_due) {
+		events.wps = check_wps();
+		wps_due = now + WPS_MS;
+	}
+	if (poll_files)
+		events.upgrade = !!length(filter(UPGRADE_FILES, f => stat(f) != null));
+}
+
+function drop_preview_file() {
+	preview = null;
+	preview_raw = null;
+	unlink(PREVIEW_FILE);
+}
+
+function poll_preview(now) {
+	let raw = readfile(PREVIEW_FILE);
+	if (raw == null) {
+		if (preview && now >= preview.until_ms)
+			preview = null;
+		return;
+	}
+	if (raw != preview_raw) {
+		let p = null;
+		try { p = json(raw); } catch (e) { }
+		if (type(p) != 'object' || !(p.effect in EFFECTS))
+			{
+			// malformed: delete the file, keep any active preview
+			preview_raw = null;
+			unlink(PREVIEW_FILE);
+			return;
+		}
+		preview_raw = raw;
+		let secs = +p.seconds;
+		secs = (secs >= 1 && secs <= 300) ? secs : 10;
+		preview = {
+			effect: p.effect, color: p.color ?? '#ffffff',
+			speed: p.speed ?? 1, brightness: p.brightness ?? 255,
+			start_ms: now, until_ms: now + int(secs * 1000)
+		};
+	}
+	if (preview && now >= preview.until_ms)
+		drop_preview_file();
+}
+
+function publish(d, now) {
+	let state = {
+		effect: d.effect, color: d.color, brightness: d.brightness,
+		events_active: d.events_active, night: d.night, preview: d.preview,
+		off: !!cfg.off, error: led_error
+	};
+	let s = sprintf('%J', state);
+	if (s == last_state_json && now - last_state_at < HEARTBEAT_MS)
+		return;
+	last_state_json = s;
+	last_state_at = now;
+	// ts: monotonic seconds, so the plugin can detect a dead service.
+	state.ts = clock(true)[0];
+	if (writefile(STATE_FILE + '.tmp', sprintf('%J', state) + '\n') != null)
+		rename(STATE_FILE + '.tmp', STATE_FILE);
+}
+
+function sysfs_write(name, value) {
+	if (writefile(LED_DIR + '/' + name, value + '\n') != null)
+		return true;
+	write_retry_due = mono_ms() + SLOW_MS; // back off to the slow cadence
+	if (!logged_write_fail) {
+		warn('ax9000-ledd: cannot write ' + LED_DIR + '/' + name + '\n');
+		logged_write_fail = true;
+	}
+	return false;
+}
+
+function apply(d) {
+	if (mono_ms() < write_retry_due)
+		return;
+	let rgb = join(' ', d.intensity);
+	if (rgb != last_applied.intensity && sysfs_write('multi_intensity', rgb))
+		last_applied.intensity = rgb;
+	if (d.brightness != last_applied.brightness && sysfs_write('brightness', d.brightness))
+		last_applied.brightness = d.brightness;
+}
+
+function tick() {
+	let now = mono_ms();
+	tick_no++;
+	if (FAULT && tick_no == FAULT)
+		die('forced fault in tick ' + tick_no);
+
+	if (stat(LED_DIR + '/multi_intensity') == null) {
+		if (!logged_missing) {
+			warn('ax9000-ledd: no multicolor LED at ' + LED_DIR + ' (no_rgb_led)\n');
+			logged_missing = true;
+		}
+		led_error = 'no_rgb_led';
+		publish({ effect: 'off', color: '#000000', brightness: 0,
+			events_active: [], night: false, preview: false }, now);
+		return ERR_MS;
+	}
+	led_error = null;
+	logged_missing = false;
+
+	let poll_files = now >= slow_due;
+	if (poll_files) {
+		slow_due = now + SLOW_MS;
+		off_flag = stat(OFF_FILE) != null;
+		poll_preview(now);
+	}
+	cfg.off = off_flag;
+	refresh_events(now, poll_files);
+
+	let lt = localtime();
+	let d = decide(cfg, events, lt.hour * 60 + lt.min, now, preview);
+	apply(d);
+	publish(d, now);
+	return d.animated ? FAST_MS : SLOW_MS;
+}
+
+// An exception must never kill the daemon (procd would give up respawning).
+function safe_tick() {
+	try {
+		return tick();
+	} catch (e) {
+		let now = mono_ms();
+		let msg = '' + (e.message ?? e);
+		if (msg != last_err || now - last_err_at > LOG_REPEAT_MS) {
+			warn('ax9000-ledd: tick failed: ' + msg + '\n');
+			last_err = msg;
+			last_err_at = now;
+		}
+		return ERR_MS;
+	}
+}
+
+load_cfg();
+
+if (TICKS > 0) {
+	for (let i = 0; i < TICKS; i++) {
+		if (i > 0)
+			sleep(2100);
+		safe_tick();
+	}
+	print(readfile(STATE_FILE) ?? '');
+	exit(0);
+}
+
+uloop.init();
+timer = uloop.timer(0, function() {
+	timer.set(safe_tick());
+});
+uloop.run();

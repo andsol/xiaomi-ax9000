@@ -1,0 +1,29 @@
+{
+	"luci-app-ax9000-controls": {
+		"description": "Grant access to AX9000 controls",
+		"read": {
+			"ubus": {
+				"ax9000.fan": [ "status", "profiles" ],
+				"ax9000.led": [ "status" ],
+				"file": [ "list", "read" ]
+			},
+			"uci": [ "ax9000", "system" ],
+			"file": {
+				"/sys/class/leds": [ "list" ],
+				"/sys/class/leds/*/trigger": [ "read" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"ax9000.fan": [ "reset_profile" ],
+				"ax9000.led": [ "preview", "off_until_reboot" ],
+				"file": [ "exec" ],
+				"uci": [ "commit" ]
+			},
+			"uci": [ "ax9000", "system" ],
+			"file": {
+				"/etc/init.d/led": [ "exec" ]
+			}
+		}
+	}
+}

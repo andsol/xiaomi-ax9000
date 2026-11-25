@@ -1,0 +1,48 @@
+#!/bin/sh
+# Create the X-light defaults once; never touch an existing configuration.
+
+uci -q get ax9000.led >/dev/null || {
+	uci -q set ax9000.led=led
+	uci -q set ax9000.led.effect='static'
+	uci -q set ax9000.led.color='#0000ff'
+	uci -q set ax9000.led.speed='1'
+	uci -q set ax9000.led.brightness='255'
+	uci -q set ax9000.led.night_enabled='0'
+	uci -q set ax9000.led.night_start='23:00'
+	uci -q set ax9000.led.night_end='07:00'
+	uci -q set ax9000.led.night_mode='off'
+	uci -q set ax9000.led.wan_iface='wan'
+}
+
+uci -q get ax9000.offline >/dev/null || {
+	uci -q set ax9000.offline=led_event
+	uci -q set ax9000.offline.enabled='1'
+	uci -q set ax9000.offline.priority='50'
+	uci -q set ax9000.offline.effect='flashing'
+	uci -q set ax9000.offline.color='#ff0000'
+	uci -q set ax9000.offline.speed='0.5'
+	uci -q set ax9000.offline.override_night='0'
+}
+
+uci -q get ax9000.wps >/dev/null || {
+	uci -q set ax9000.wps=led_event
+	uci -q set ax9000.wps.enabled='1'
+	uci -q set ax9000.wps.priority='80'
+	uci -q set ax9000.wps.effect='breathing'
+	uci -q set ax9000.wps.color='#00ff00'
+	uci -q set ax9000.wps.speed='2'
+	uci -q set ax9000.wps.override_night='0'
+}
+
+uci -q get ax9000.upgrade >/dev/null || {
+	uci -q set ax9000.upgrade=led_event
+	uci -q set ax9000.upgrade.enabled='1'
+	uci -q set ax9000.upgrade.priority='90'
+	uci -q set ax9000.upgrade.effect='static'
+	uci -q set ax9000.upgrade.color='#ffa000'
+	uci -q set ax9000.upgrade.speed='1'
+	uci -q set ax9000.upgrade.override_night='1'
+}
+
+uci -q commit ax9000
+exit 0

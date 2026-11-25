@@ -1,0 +1,11 @@
+.env
+/firmware
+/out
+/.worktrees
+/.superpowers
+__pycache__/
+.pytest_cache/
+/config/local.config
+/bdf/board-xiaomi_ax9000.qcn9074
+/docs/superpowers/
+*.log

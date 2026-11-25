@@ -1,0 +1,137 @@
+From 9d22adab60d55194a4af03689d02fac82e397b15 Mon Sep 17 00:00:00 2001
+From: Andrey <ax9000@users.noreply.invalid>
+Date: Sun, 22 Nov 2026 11:15:00 +0000
+Subject: [PATCH 202/202] qualcommax: ipq807x: ax9000: drive the X light with
+ hardware PWM
+
+The RGB "X" light on top of the AX9000 is wired to GPIO 63/64/66, which
+the stock firmware muxes to pwm0/pwm1/pwm2 (drive strength 8) and drives
+from the ADSS PWM. Do the same: enable &pwm with that pin state and
+expose the three channels as one pwm-leds-multicolor LED
+(rgb:indicator, max brightness 255, 1 ms period) instead of three
+on/off gpio-leds.
+
+Give the remaining gpio-leds a function so they get stable names:
+blue:status, yellow:status (the led-boot/failsafe/running/upgrade
+aliases are unchanged) and blue:wan, yellow:wan for the network LED.
+
+Signed-off-by: Andrey <ax9000@users.noreply.invalid>
+---
+ .../arm64/boot/dts/qcom/ipq8072-ax9000.dts    | 68 +++++++++++++++----
+ 1 file changed, 54 insertions(+), 14 deletions(-)
+
+diff --git a/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
+index e11407d6d4..b90a3ddcb0 100644
+--- a/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
++++ b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
+@@ -50,39 +50,51 @@
+ 		led_system_blue: system-blue {
+ 			gpios = <&tlmm 48 GPIO_ACTIVE_HIGH>;
+ 			color = <LED_COLOR_ID_BLUE>;
++			function = LED_FUNCTION_STATUS;
+ 		};
+ 
+ 		led_system_yellow: system-yellow {
+ 			gpios = <&tlmm 52 GPIO_ACTIVE_HIGH>;
+ 			color = <LED_COLOR_ID_YELLOW>;
++			function = LED_FUNCTION_STATUS;
+ 		};
+ 
+ 		network-yellow {
+ 			gpios = <&tlmm 50 GPIO_ACTIVE_HIGH>;
+ 			color = <LED_COLOR_ID_YELLOW>;
++			function = LED_FUNCTION_WAN;
+ 		};
+ 
+ 		network-blue {
+ 			gpios = <&tlmm 51 GPIO_ACTIVE_HIGH>;
+ 			color = <LED_COLOR_ID_BLUE>;
++			function = LED_FUNCTION_WAN;
+ 		};
++	};
+ 
+-		top-red {
+-			gpios = <&tlmm 63 GPIO_ACTIVE_HIGH>;
+-			color = <LED_COLOR_ID_RED>;
+-			default-state = "keep";
+-		};
++	/* "X" light on top: R/G/B on GPIO 63/64/66, driven by PWM 0/1/2 */
++	led-controller {
++		compatible = "pwm-leds-multicolor";
+ 
+-		top-green {
+-			gpios = <&tlmm 64 GPIO_ACTIVE_HIGH>;
+-			color = <LED_COLOR_ID_GREEN>;
+-			default-state = "keep";
+-		};
++		multi-led {
++			color = <LED_COLOR_ID_RGB>;
++			function = LED_FUNCTION_INDICATOR;
++			max-brightness = <255>;
+ 
+-		top-blue {
+-			gpios = <&tlmm 66 GPIO_ACTIVE_HIGH>;
+-			color = <LED_COLOR_ID_BLUE>;
+-			default-state = "keep";
++			led-red {
++				pwms = <&pwm 0 1000000>;
++				color = <LED_COLOR_ID_RED>;
++			};
++
++			led-green {
++				pwms = <&pwm 1 1000000>;
++				color = <LED_COLOR_ID_GREEN>;
++			};
++
++			led-blue {
++				pwms = <&pwm 2 1000000>;
++				color = <LED_COLOR_ID_BLUE>;
++			};
+ 		};
+ 	};
+ };
+@@ -110,6 +122,27 @@
+ 		drive-strength = <8>;
+ 		bias-disable;
+ 	};
++
++	/* Same mux and drive strength as the stock firmware's pwm_pinmux */
++	pwm_pins: pwm-state {
++		red-pins {
++			pins = "gpio63";
++			function = "pwm0";
++			drive-strength = <8>;
++		};
++
++		green-pins {
++			pins = "gpio64";
++			function = "pwm1";
++			drive-strength = <8>;
++		};
++
++		blue-pins {
++			pins = "gpio66";
++			function = "pwm2";
++			drive-strength = <8>;
++		};
++	};
+ };
+ 
+ &blsp1_uart5 {
+@@ -139,6 +172,13 @@
+ 	};
+ };
+ 
++&pwm {
++	status = "okay";
++
++	pinctrl-0 = <&pwm_pins>;
++	pinctrl-names = "default";
++};
++
+ &prng {
+ 	status = "okay";
+ };
+-- 
+2.39.5
+

@@ -1,0 +1,35 @@
+From f1e95d6444ad3e9be88bf0831ae9f738506de086 Mon Sep 17 00:00:00 2001
+From: Andrey <ax9000@users.noreply.invalid>
+Date: Sun, 22 Nov 2026 10:32:23 +0000
+Subject: [PATCH 2/2] qualcommax: ax9000: limit QCN9074 to 5150-5350 MHz
+
+The QCN9074 radio (phy3) serves the lower 5 GHz band only. Set
+ieee80211-freq-limit so ath11k (wiphy_read_of_freq_limits) disables
+channels outside 5150-5350 MHz and never starts the radio on 100+.
+
+Signed-off-by: Andrey <ax9000@users.noreply.invalid>
+---
+ .../files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts      | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
+index 54c1388597..188f2a71d3 100644
+--- a/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
++++ b/target/linux/qualcommax/files/arch/arm64/boot/dts/qcom/ipq8072-ax9000.dts
+@@ -544,6 +544,13 @@
+ 			reg = <0x00010000 0 0 0 0>;
+ 
+ 			qcom,ath11k-calibration-variant = "Xiaomi-AX9000";
++
++			/*
++			 * Lower 5 GHz band only: this QCN9074 radio is limited to
++			 * 5150-5350 MHz (channels 36-64); the upper band belongs to
++			 * the IPQ8074 radio.
++			 */
++			ieee80211-freq-limit = <5150000 5350000>;
+ 		};
+ 	};
+ };
+-- 
+2.39.5
+
